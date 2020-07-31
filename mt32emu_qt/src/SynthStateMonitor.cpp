@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,22 +16,22 @@
 
 #include "SynthStateMonitor.h"
 
-#include <mt32emu/mt32emu.h>
-
 #include "SynthRoute.h"
 #include "ui_SynthWidget.h"
 #include "font_6x8.h"
 
-static const int SYNTH_MONITOR_UPDATE_MILLIS = 30;
-static const MasterClockNanos LCD_MESSAGE_DISPLAYING_NANOS = 2 * MasterClock::NANOS_PER_SECOND;
-static const MasterClockNanos LCD_TIMBRE_NAME_DISPLAYING_NANOS = 1 * MasterClock::NANOS_PER_SECOND;
+static const MasterClockNanos LCD_MESSAGE_DISPLAYING_NANOS = 200 * MasterClock::NANOS_PER_MILLISECOND;
+static const MasterClockNanos LCD_TIMBRE_NAME_DISPLAYING_NANOS = 1200 * MasterClock::NANOS_PER_MILLISECOND;
+static const MasterClockNanos MIDI_MESSAGE_LED_MINIMUM_NANOS = 60 * MasterClock::NANOS_PER_MILLISECOND;
+static const MasterClockNanos MINIMUM_UPDATE_INTERVAL_NANOS = 30 * MasterClock::NANOS_PER_MILLISECOND;
 
-static const QString BANK_NAMES[] = {"Synth-1", "Synth-2", "Memory ", "Rhythm "};
 static const QColor COLOR_GRAY = QColor(100, 100, 100);
 static const QColor COLOR_GREEN = Qt::green;
 static const QColor lcdBgColor(98, 127, 0);
 static const QColor lcdFgColor(232, 254, 0);
 static const QColor partialStateColor[] = {COLOR_GRAY, Qt::red, Qt::yellow, Qt::green};
+
+using namespace MT32Emu;
 
 SynthStateMonitor::SynthStateMonitor(Ui::SynthWidget *ui, SynthRoute *useSynthRoute) :
 	synthRoute(useSynthRoute),
@@ -39,17 +39,13 @@ SynthStateMonitor::SynthStateMonitor(Ui::SynthWidget *ui, SynthRoute *useSynthRo
 	lcdWidget(*this, ui->synthFrame),
 	midiMessageLED(&COLOR_GRAY, ui->midiMessageFrame)
 {
+	partialCount = useSynthRoute->getPartialCount();
+	allocatePartialsData();
+
 	lcdWidget.setMinimumSize(254, 40);
 	ui->synthFrameLayout->insertWidget(1, &lcdWidget);
 	midiMessageLED.setMinimumSize(10, 2);
 	ui->midiMessageLayout->addWidget(&midiMessageLED, 0, Qt::AlignHCenter);
-
-	for (int i = 0; i < MT32EMU_DEFAULT_MAX_PARTIALS; i++) {
-		partialStateLED[i] = new LEDWidget(&COLOR_GRAY, ui->partialStateGrid->widget());
-		partialStateLED[i]->setMinimumSize(16, 16);
-		partialStateLED[i]->setMaximumSize(16, 16);
-		ui->partialStateGrid->addWidget(partialStateLED[i], i >> 2, i & 3);
-	}
 
 	for (int i = 0; i < 9; i++) {
 		patchNameLabel[i] = new QLabel(ui->polyStateGrid->widget());
@@ -61,14 +57,14 @@ SynthStateMonitor::SynthStateMonitor(Ui::SynthWidget *ui, SynthRoute *useSynthRo
 		ui->polyStateGrid->addWidget(partStateWidget[i], i, 1);
 	}
 
-	handleReset();
-	synthRoute->connectSynth(SIGNAL(partStateReset()), this, SLOT(handleReset()));
-	synthRoute->connectSynth(SIGNAL(midiMessagePushed()), this, SLOT(handleMIDIMessagePushed()));
-	synthRoute->connectReportHandler(SIGNAL(programChanged(int, int, QString)), this, SLOT(handleProgramChanged(int, int, QString)));
+	handleSynthStateChange(synthRoute->getState() == SynthRouteState_OPEN ? SynthState_OPEN : SynthState_CLOSED);
+	synthRoute->connectSynth(SIGNAL(stateChanged(SynthState)), this, SLOT(handleSynthStateChange(SynthState)));
+	synthRoute->connectSynth(SIGNAL(audioBlockRendered()), this, SLOT(handleUpdate()));
+	synthRoute->connectReportHandler(SIGNAL(programChanged(int, QString, QString)), this, SLOT(handleProgramChanged(int, QString, QString)));
 	synthRoute->connectReportHandler(SIGNAL(polyStateChanged(int)), this, SLOT(handlePolyStateChanged(int)));
 	synthRoute->connectReportHandler(SIGNAL(lcdMessageDisplayed(const QString)), &lcdWidget, SLOT(handleLCDMessageDisplayed(const QString)));
+	synthRoute->connectReportHandler(SIGNAL(midiMessagePlayed()), this, SLOT(handleMIDIMessagePlayed()));
 	synthRoute->connectReportHandler(SIGNAL(masterVolumeChanged(int)), &lcdWidget, SLOT(handleMasterVolumeChanged(int)));
-	connect(&timer, SIGNAL(timeout()), SLOT(handleUpdate()));
 }
 
 SynthStateMonitor::~SynthStateMonitor() {
@@ -76,23 +72,32 @@ SynthStateMonitor::~SynthStateMonitor() {
 		delete partStateWidget[i];
 		delete patchNameLabel[i];
 	}
-	for (int i = 0; i < MT32EMU_DEFAULT_MAX_PARTIALS; i++) delete partialStateLED[i];
+	freePartialsData();
 }
 
 void SynthStateMonitor::enableMonitor(bool enable) {
 	if (enable) {
-		timer.start(SYNTH_MONITOR_UPDATE_MILLIS);
+		enabled = true;
+		previousUpdateNanos = MasterClock::getClockNanos() - MINIMUM_UPDATE_INTERVAL_NANOS;
 	} else {
-		timer.stop();
+		enabled = false;
 	}
 }
 
-void SynthStateMonitor::handleReset() {
+void SynthStateMonitor::handleSynthStateChange(SynthState state) {
+	enableMonitor(state == SynthState_OPEN);
 	lcdWidget.reset();
 	midiMessageLED.setColor(&COLOR_GRAY);
 
-	for (int i = 0; i < MT32EMU_DEFAULT_MAX_PARTIALS; i++) {
-		partialStateLED[i]->setColor(&partialStateColor[PartialState_DEAD]);
+	uint newPartialCount = synthRoute->getPartialCount();
+	if (partialCount == newPartialCount || state != SynthState_OPEN) {
+		for (unsigned int i = 0; i < partialCount; i++) {
+			partialStateLED[i]->setColor(&partialStateColor[PartialState_INACTIVE]);
+		}
+	} else {
+		freePartialsData();
+		partialCount = newPartialCount;
+		allocatePartialsData();
 	}
 
 	for (int i = 0; i < 9; i++) {
@@ -101,9 +106,10 @@ void SynthStateMonitor::handleReset() {
 	}
 }
 
-void SynthStateMonitor::handleMIDIMessagePushed() {
+void SynthStateMonitor::handleMIDIMessagePlayed() {
 	if (ui->synthFrame->isVisible() && synthRoute->getState() == SynthRouteState_OPEN) {
 		midiMessageLED.setColor(&COLOR_GREEN);
+		midiMessageLEDStartNanos = MasterClock::getClockNanos();
 	}
 }
 
@@ -111,31 +117,27 @@ void SynthStateMonitor::handlePolyStateChanged(int partNum) {
 	partStateWidget[partNum]->update();
 }
 
-void SynthStateMonitor::handleProgramChanged(int partNum, int timbreGroup, QString patchName) {
+void SynthStateMonitor::handleProgramChanged(int partNum, QString soundGroupName, QString patchName) {
 	patchNameLabel[partNum]->setText(patchName);
-	lcdWidget.setProgramChangeLCDText(partNum + 1, BANK_NAMES[timbreGroup], patchName);
+	lcdWidget.setProgramChangeLCDText(partNum + 1, soundGroupName, patchName);
 }
 
 void SynthStateMonitor::handleUpdate() {
-	if (synthRoute->getState() != SynthRouteState_OPEN) return;
-	bool partActiveNonReleasing[9] = {false};
+	if (!enabled) return;
+	MasterClockNanos nanosNow = MasterClock::getClockNanos();
+	if (nanosNow - previousUpdateNanos < MINIMUM_UPDATE_INTERVAL_NANOS) return;
+	previousUpdateNanos = nanosNow;
 	bool midiMessageOn = false;
-	for (int partialNum = 0; partialNum < MT32EMU_DEFAULT_MAX_PARTIALS; partialNum++) {
-		const MT32Emu::Partial *partial = synthRoute->getPartial(partialNum);
-		int partNum = partial->getOwnerPart();
-		bool partialActive = partNum > -1;
-		PartialState partialState = partialActive ? QSynth::getPartialState(partial->getTVA()->getPhase()) : PartialState_DEAD;
-		partialStateLED[partialNum]->setColor(&partialStateColor[partialState]);
-		if (partialActive) {
-			const MT32Emu::Poly *poly = partial->getPoly();
-			bool polyActiveNonReleasing = poly != NULL && poly->isActive() && poly->getState() != MT32Emu::POLY_Releasing;
-			partActiveNonReleasing[partNum] = partActiveNonReleasing[partNum] || polyActiveNonReleasing;
-			midiMessageOn = midiMessageOn || polyActiveNonReleasing;
-		}
+	synthRoute->getPartialStates(partialStates);
+	for (unsigned int partialNum = 0; partialNum < partialCount; partialNum++) {
+		partialStateLED[partialNum]->setColor(&partialStateColor[partialStates[partialNum]]);
 	}
-	if (((lcdWidget.lcdState == LCDWidget::DISPLAYING_MESSAGE) && (MasterClock::getClockNanos() - lcdWidget.lcdStateStartNanos > LCD_MESSAGE_DISPLAYING_NANOS))
-		|| ((lcdWidget.lcdState == LCDWidget::DISPLAYING_TIMBRE_NAME) && (MasterClock::getClockNanos() - lcdWidget.lcdStateStartNanos > LCD_TIMBRE_NAME_DISPLAYING_NANOS)))
-	{
+	bool partActiveNonReleasing[9] = {false};
+	synthRoute->getPartStates(partActiveNonReleasing);
+	for (unsigned int partNum = 0; partNum < 9; partNum++) {
+		midiMessageOn = midiMessageOn || partActiveNonReleasing[partNum];
+	}
+	if ((lcdWidget.lcdState == LCDWidget::DISPLAYING_TIMBRE_NAME) && (nanosNow - lcdWidget.lcdStateStartNanos > LCD_TIMBRE_NAME_DISPLAYING_NANOS)) {
 		lcdWidget.setPartStateLCDText();
 	}
 	if (lcdWidget.lcdState == LCDWidget::DISPLAYING_PART_STATE) {
@@ -146,7 +148,48 @@ void SynthStateMonitor::handleUpdate() {
 		lcdWidget.update();
 	}
 
-	midiMessageLED.setColor(midiMessageOn ? &COLOR_GREEN : &COLOR_GRAY);
+	if (midiMessageOn) {
+		midiMessageLED.setColor(&COLOR_GREEN);
+		midiMessageLEDStartNanos = nanosNow;
+	} else if ((nanosNow - midiMessageLEDStartNanos) > MIDI_MESSAGE_LED_MINIMUM_NANOS) {
+		midiMessageLED.setColor(&COLOR_GRAY);
+	}
+}
+
+void SynthStateMonitor::allocatePartialsData() {
+	partialStates = new PartialState[partialCount];
+	keysOfPlayingNotes = new Bit8u[partialCount];
+	velocitiesOfPlayingNotes = new Bit8u[partialCount];
+
+	partialStateLED = new LEDWidget*[partialCount];
+	unsigned int partialColumnWidth;
+	if (partialCount < 64) {
+		partialColumnWidth = 4;
+	} else if (partialCount < 128) {
+		partialColumnWidth = 8;
+	} else {
+		partialColumnWidth = 16;
+	}
+	for (unsigned int i = 0; i < partialCount; i++) {
+		partialStateLED[i] = new LEDWidget(&COLOR_GRAY, ui->partialStateGrid->widget());
+		partialStateLED[i]->setMinimumSize(16, 16);
+		partialStateLED[i]->setMaximumSize(16, 16);
+		ui->partialStateGrid->addWidget(partialStateLED[i], i / partialColumnWidth, i % partialColumnWidth);
+	}
+}
+
+void SynthStateMonitor::freePartialsData() {
+	if (partialStateLED != NULL) {
+		for (unsigned int i = 0; i < partialCount; i++) delete partialStateLED[i];
+	}
+	delete[] partialStateLED;
+	partialStateLED = NULL;
+	delete[] velocitiesOfPlayingNotes;
+	velocitiesOfPlayingNotes = NULL;
+	delete[] keysOfPlayingNotes;
+	keysOfPlayingNotes = NULL;
+	delete[] partialStates;
+	partialStates = NULL;
 }
 
 LEDWidget::LEDWidget(const QColor *color, QWidget *parent) : QWidget(parent), colorProperty(color) {}
@@ -175,16 +218,12 @@ void PartStateWidget::paintEvent(QPaintEvent *) {
 	QPainter painter(this);
 	painter.fillRect(rect(), COLOR_GRAY);
 	if (monitor.synthRoute->getState() != SynthRouteState_OPEN) return;
-	for (int i = 0; i < MT32EMU_DEFAULT_MAX_PARTIALS; i++) {
-		const MT32Emu::Partial *partial = monitor.synthRoute->getPartial(i);
-		if (partial->getOwnerPart() != partNum) continue;
-		const MT32Emu::Poly *poly = partial->getPoly();
-		if (poly == NULL) continue;
-		uint velocity = poly->getVelocity();
+	uint playingNotes = monitor.synthRoute->getPlayingNotes(partNum, monitor.keysOfPlayingNotes, monitor.velocitiesOfPlayingNotes);
+	while (playingNotes-- > 0) {
+		uint velocity = monitor.velocitiesOfPlayingNotes[playingNotes];
 		if (velocity == 0) continue;
-		uint key = poly->getKey();
 		QColor color(2 * velocity, 255 - 2 * velocity, 0);
-		uint x  = 5 * (key - 12);
+		uint x  = 5 * (monitor.keysOfPlayingNotes[playingNotes] - 12);
 		painter.fillRect(x, 0, 5, 16, color);
 	}
 }
@@ -259,13 +298,14 @@ void LCDWidget::paintEvent(QPaintEvent *) {
 void LCDWidget::handleLCDMessageDisplayed(const QString useText) {
 	lcdState = DISPLAYING_MESSAGE;
 	lcdStateStartNanos = MasterClock::getClockNanos();
-	lcdText = useText.toAscii();
+	lcdText = useText.toLocal8Bit();
 	update();
 }
 
 void LCDWidget::handleMasterVolumeChanged(int volume) {
 	masterVolume = volume;
-	if (lcdState == DISPLAYING_PART_STATE) {
+	MasterClockNanos nanosNow = MasterClock::getClockNanos();
+	if ((lcdState != DISPLAYING_MESSAGE) || (nanosNow - lcdStateStartNanos > LCD_MESSAGE_DISPLAYING_NANOS)) {
 		setPartStateLCDText();
 		update();
 	}
@@ -273,14 +313,19 @@ void LCDWidget::handleMasterVolumeChanged(int volume) {
 
 void LCDWidget::setPartStateLCDText() {
 	lcdState = DISPLAYING_PART_STATE;
-	lcdText = QString().sprintf("1 2 3 4 5 R |vol:%3d", masterVolume).toAscii();
+	lcdText = QString("1 2 3 4 5 R |vol:%1").arg(masterVolume, 3).toLocal8Bit();
 }
 
-void LCDWidget::setProgramChangeLCDText(int partNum, QString bankName, QString timbreName) {
-	if ((lcdState != DISPLAYING_MESSAGE) || (MasterClock::getClockNanos() - lcdStateStartNanos > LCD_MESSAGE_DISPLAYING_NANOS)) {
+void LCDWidget::setProgramChangeLCDText(int partNum, QString soundGroupName, QString timbreName) {
+	MasterClockNanos nanosNow = MasterClock::getClockNanos();
+	if ((lcdState != DISPLAYING_MESSAGE) || (nanosNow - lcdStateStartNanos > LCD_MESSAGE_DISPLAYING_NANOS)) {
 		lcdState = DISPLAYING_TIMBRE_NAME;
-		lcdStateStartNanos = MasterClock::getClockNanos();
-		lcdText = (QString().sprintf("%1i|", partNum) + bankName + "|" + timbreName).toAscii();
+		lcdStateStartNanos = nanosNow;
+#if (QT_VERSION < QT_VERSION_CHECK(4, 6, 0))
+		lcdText = (QString::number(partNum) + '|' + soundGroupName + timbreName).toLocal8Bit();
+#else
+		lcdText = QString(QString::number(partNum) % '|' % soundGroupName % timbreName).toLocal8Bit();
+#endif
 		update();
 	}
 }

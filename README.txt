@@ -1,7 +1,7 @@
 mt32emu
 =======
-mt32emu is a C++ static link library which provides classes to approximately emulate
-the Roland MT-32, CM-32L and LAPC-I synthesiser modules.
+mt32emu is a C/C++ library which allows to emulate (approximately) the Roland
+MT-32, CM-32L and LAPC-I synthesiser modules.
 
 mt32emu_alsadrv
 ===============
@@ -25,11 +25,7 @@ and is able to operate in stand-alone mode if the main application mt32emu_qt is
 
 mt32emu_win32drv_setup
 ======================
-A tool intended to fascilitate installation / upgrade of the Windows driver mt32emu_win32drv.
-
-portaudio
-=========
-Portable Real-Time Audio Library, the main UI-enabled synthesiser application mt32emu_qt depends on.
+Helper tools intended to facilitate installation / upgrade of the Windows driver mt32emu_win32drv.
 
 mt32emu_qt
 ==========

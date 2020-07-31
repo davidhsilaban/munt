@@ -1,15 +1,29 @@
-Patch for official DOSBox release v.0.74 to add mt32emu MIDI device
+Patches for DOSBox to add mt32emu MIDI device
 
-dosbox-0.74-mt32-patch.diff - diff file to be applied to DOSBox's source distribution.
+dosbox-0.74-3-mt32-patch.diff - diff file to be applied to official DOSBox release v.0.74-3 source distribution.
 
-singleThread/midi_mt32.h    - straightforward version of the synth engine.
-                              Simple, accurate and robust rendering.
-                              Lacks the support for additional CPU / cores.
+dosbox-SVN-r4319-mt32-patch.diff - diff file to be applied to official DOSBox sources SVN r4319 (and up, hopefully).
+                                   It uses a bit different and clear approach introduced since SVN r3836.
 
-syncThread/midi_mt32.h      - version of the synth engine with synchronous rendering in a separate thread
-                              Utilizes power of another CPU / core.
-                              Adds latency about 1 ms and consumes more CPU time.
+How to build a patched version of DOSBox
+========================================
+This describes the steps necessary to produce a DOSBox binary with built-in MT-32 emulation using the GNU toolchain.
+Note, builds with Microsoft Visual Studio or Xcode are not covered here. On Windows, MSYS can be used.
 
-asyncThread/midi_mt32.h     - version of the synth engine with asynchronous rendering in a separate thread
-                              Compared to the sync version, consumes significantly less CPU time.
-                              Adds latency about 128 ms.
+1. Ensure that the mt32emu library is built and installed in the system. Typically, the library headers should appear
+   under the /usr/local/include directory and the library binary itself should be in /usr/local/lib. Usual steps
+
+     cd <munt source directory>
+     cmake .
+     make
+     [sudo] make install
+
+   should do the job.
+
+2. Apply the patch file that corresponds to the DOSBox version being compiled, like this:
+
+     cd <DOSBox source directory>
+     patch -p1 < <munt source directory>/DOSBox-mt32-patch/dosbox-0.74-3-mt32-patch.diff
+
+3. Proceed with autogen and configure, as is normally done to build DOSBox from sources.
+4. Adjust DOSBox configuration to pick up the ROM files, etc.

@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -37,7 +37,7 @@ void MidiRecorder::recordShortMessage(quint32 msg, MasterClockNanos midiNanos) {
 	}
 }
 
-void MidiRecorder::recordSysex(uchar *sysexData, quint32 sysexLen, MasterClockNanos midiNanos) {
+void MidiRecorder::recordSysex(const uchar *sysexData, quint32 sysexLen, MasterClockNanos midiNanos) {
 	if (isRecording()) {
 		midiEventList.newMidiEvent().assignSysex(midiNanos, sysexData, sysexLen);
 	}
@@ -52,7 +52,7 @@ bool MidiRecorder::isRecording() {
 }
 
 bool MidiRecorder::saveSMF(QString fileName, MasterClockNanos midiTick) {
-	division = uint(DEFAULT_NANOS_PER_QUARTER_NOTE / midiTick);
+	uint division = uint(DEFAULT_NANOS_PER_QUARTER_NOTE / midiTick);
 
 	// Clamp division to fit to 16-bit signed integer
 	if (division > 32767) {
@@ -62,7 +62,7 @@ bool MidiRecorder::saveSMF(QString fileName, MasterClockNanos midiTick) {
 	file.setFileName(fileName);
 	forever {
 		if (!file.open(QIODevice::WriteOnly)) break;
-		if (!writeHeader()) break;
+		if (!writeHeader(division)) break;
 		if (!writeTrack(midiTick)) break;
 		file.close();
 		return true;
@@ -71,7 +71,7 @@ bool MidiRecorder::saveSMF(QString fileName, MasterClockNanos midiTick) {
 	return false;
 }
 
-bool MidiRecorder::writeHeader() {
+bool MidiRecorder::writeHeader(uint division) {
 	if (!writeFile(headerID, 8)) return false;
 	char header[6];
 	qToBigEndian<quint16>(0, (uchar *)&header[0]); // format 0
@@ -95,7 +95,7 @@ bool MidiRecorder::writeTrack(MasterClockNanos midiTick) {
 	uchar eventData[16]; // Buffer for single short event / sysex header
 	for (int i = 0; i < midiEventList.count(); i++) {
 		// Compute timestamp
-		const MidiEvent &evt = midiEventList.at(i);
+		const QMidiEvent &evt = midiEventList.at(i);
 		uchar *data = eventData;
 		quint32 deltaTicks = (evt.getTimestamp() - startNanos) / midiTick - eventTicks;
 		eventTicks += deltaTicks;
@@ -120,6 +120,11 @@ bool MidiRecorder::writeTrack(MasterClockNanos midiTick) {
 			// Process short message
 			quint32 message = evt.getShortMessage();
 			uint newStatus = message & 0xFF;
+			if (0xF0 <= newStatus) {
+				// No support for escaping System messages, ignore
+				qDebug() << "MidiRecorder: unsupported System message skipped at:" << evt.getTimestamp() - startNanos << "nanos, code:" << newStatus;
+				continue;
+			}
 			if (newStatus == runningStatus) {
 				message >>= 8;
 				if ((newStatus & 0xE0) == 0xC0) {

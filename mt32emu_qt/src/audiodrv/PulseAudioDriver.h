@@ -8,7 +8,6 @@
 #include <mt32emu/mt32emu.h>
 
 #include "AudioDriver.h"
-#include "../ClockSync.h"
 
 class Master;
 class QSynth;
@@ -16,22 +15,16 @@ class PulseAudioDriver;
 
 class PulseAudioStream : public AudioStream {
 private:
-	unsigned int bufferSize;
-	unsigned int audioLatency;
-	unsigned int midiLatency;
-	ClockSync clockSync;
-	QSynth *synth;
-	unsigned int sampleRate;
 	MT32Emu::Bit16s *buffer;
 	pa_simple *stream;
-	qint64 sampleCount;
-	bool pendingClose;
-	bool useAdvancedTiming;
+	uint bufferSize;
+	pthread_t processingThreadID;
+	volatile bool stopProcessing;
 
-	static void* processingThread(void *);
+	static void *processingThread(void *);
 
 public:
-	PulseAudioStream(const AudioDevice *device, QSynth *useSynth, unsigned int useSampleRate);
+	PulseAudioStream(const AudioDriverSettings &settings, QSynth &synth, const quint32 sampleRate);
 	~PulseAudioStream();
 	bool start();
 	void close();
@@ -39,9 +32,9 @@ public:
 
 class PulseAudioDefaultDevice : public AudioDevice {
 friend class PulseAudioDriver;
-	PulseAudioDefaultDevice(PulseAudioDriver * const driver);
+	PulseAudioDefaultDevice(PulseAudioDriver &driver);
 public:
-	PulseAudioStream *startAudioStream(QSynth *synth, unsigned int sampleRate) const;
+	AudioStream *startAudioStream(QSynth &synth, const uint sampleRate) const;
 };
 
 class PulseAudioDriver : public AudioDriver {

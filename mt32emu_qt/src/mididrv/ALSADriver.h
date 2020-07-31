@@ -1,57 +1,43 @@
 #ifndef ALSA_MIDI_DRIVER_H
 #define ALSA_MIDI_DRIVER_H
 
-#include <QObject>
-#include <QThread>
-
 #include <alsa/asoundlib.h>
 
-#include "MidiDriver.h"
+#include "OSSMidiPortDriver.h"
 
-class SynthRoute;
-class ALSAMidiDriver;
-class MidiSession;
-
-class ALSAProcessor : public QObject {
+class ALSAMidiDriver : public MidiDriver {
 	Q_OBJECT
 public:
-	ALSAProcessor(ALSAMidiDriver *useALSAMidiDriver, snd_seq_t *init_seq);
-
+	ALSAMidiDriver(Master *useMaster);
+	~ALSAMidiDriver();
+	void start();
 	void stop();
-
-public slots:
-	void processSeqEvents();
+	bool canCreatePort();
+	bool canDeletePort(MidiSession *);
+	bool canSetPortProperties(MidiSession *);
+	bool createPort(MidiPropertiesDialog *, MidiSession *);
+	void deletePort(MidiSession *);
+	bool setPortProperties(MidiPropertiesDialog *, MidiSession *);
+	QString getNewPortName(MidiPropertiesDialog *);
 
 private:
-	ALSAMidiDriver *alsaMidiDriver;
-	snd_seq_t *seq;
+	snd_seq_t *snd_seq;
+	pthread_t processingThreadID;
 	volatile bool stopProcessing;
 	QList<unsigned int> clients;
+	QVarLengthArray<MT32Emu::Bit8u,MT32Emu::SYSEX_BUFFER_SIZE> sysexBuffer;
+	OSSMidiPortDriver rawMidiPortDriver;
 
+	static void *processingThread(void *userData);
+	int alsa_setup_midi();
+	void processSeqEvents();
 	bool processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synthRoute);
 	unsigned int getSourceAddr(snd_seq_event_t *seq_event);
 	QString getClientName(unsigned int clientAddr);
 	MidiSession *findMidiSessionForClient(unsigned int clientAddr);
 
 signals:
-	void finished();
-};
-
-class ALSAMidiDriver : public MidiDriver {
-	Q_OBJECT
-	friend class ALSAProcessor;
-public:
-	ALSAMidiDriver(Master *useMaster);
-	~ALSAMidiDriver();
-	void start();
-	void stop();
-	bool canSetPortProperties(MidiSession *);
-	bool setPortProperties(MidiPropertiesDialog *mpd, MidiSession *);
-
-private:
-	snd_seq_t *snd_seq;
-	ALSAProcessor *processor;
-	QThread processorThread;
+	void mainWindowTitleContributionUpdated(const QString &);
 };
 
 #endif

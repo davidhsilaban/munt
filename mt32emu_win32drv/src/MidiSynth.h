@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012 Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -27,10 +27,16 @@ private:
 	unsigned int midiLatency;
 	unsigned int bufferSize;
 	unsigned int chunkSize;
+	unsigned int settingsVersion;
 	bool useRingBuffer;
 	bool resetEnabled;
+	char audioDeviceName[MAXPNAMELEN];
 
 	DACInputMode emuDACInputMode;
+	MIDIDelayMode midiDelayMode;
+	AnalogOutputMode analogOutputMode;
+	RendererType rendererType;
+	Bit32u partialCount;
 	float outputGain;
 	float reverbOutputGain;
 	bool reverbEnabled;
@@ -38,16 +44,20 @@ private:
 	Bit8u reverbMode;
 	Bit8u reverbTime;
 	Bit8u reverbLevel;
+	unsigned int reverbCompatibilityMode;
+	bool reversedStereoEnabled;
+	bool niceAmpRamp;
+	double sampleRateRatio;
 
 	Bit16s *buffer;
-	DWORD framesRendered;
+	volatile UINT64 renderedFramesCount;
 
 	Synth *synth;
 	const ROMImage *controlROM;
 	const ROMImage *pcmROM;
 
 	unsigned int MillisToFrames(unsigned int millis);
-	void LoadSettings();
+	void LoadWaveOutSettings();
 	void ReloadSettings();
 	void ApplySettings();
 
@@ -57,11 +67,13 @@ public:
 	static MidiSynth &getInstance();
 	int Init();
 	void Close();
+	void FreeROMImages();
 	int Reset();
 	void RenderAvailableSpace();
 	void Render(Bit16s *bufpos, DWORD totalFrames);
-	void PushMIDI(DWORD msg);
-	void PlaySysex(Bit8u *bufpos, DWORD len);
+	Bit32u getMIDIEventTimestamp();
+	void PlayMIDI(DWORD msg);
+	void PlaySysex(const Bit8u *bufpos, DWORD len);
 };
 
 }

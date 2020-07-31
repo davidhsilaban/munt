@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -32,6 +32,8 @@ AudioPropertiesDialog::~AudioPropertiesDialog()
 }
 
 void AudioPropertiesDialog::getData(AudioDriverSettings &driverSettings) {
+	driverSettings.sampleRate = ui->sampleRate->currentText().toUInt();
+	driverSettings.srcQuality = MT32Emu::SamplerateConversionQuality(ui->srcQuality->currentIndex());
 	driverSettings.chunkLen = ui->chunkLen->text().toInt();
 	driverSettings.audioLatency = ui->audioLatency->text().toInt();
 	driverSettings.midiLatency = ui->midiLatency->text().toInt();
@@ -39,6 +41,14 @@ void AudioPropertiesDialog::getData(AudioDriverSettings &driverSettings) {
 }
 
 void AudioPropertiesDialog::setData(const AudioDriverSettings &driverSettings) {
+	int ix = (driverSettings.sampleRate <= 0) ? 0 : ui->sampleRate->findText(QString().setNum(driverSettings.sampleRate));
+	if (ix < 0) {
+		ui->sampleRate->addItem(QString().setNum(driverSettings.sampleRate));
+		ui->sampleRate->setCurrentIndex(ui->sampleRate->count() - 1);
+	} else {
+		ui->sampleRate->setCurrentIndex(ix);
+	}
+	ui->srcQuality->setCurrentIndex(driverSettings.srcQuality);
 	ui->chunkLen->setText(QString().setNum(driverSettings.chunkLen));
 	ui->audioLatency->setText(QString().setNum(driverSettings.audioLatency));
 	ui->midiLatency->setText(QString().setNum(driverSettings.midiLatency));

@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -34,7 +34,8 @@ SynthRoute::SynthRoute(QObject *parent) :
 	state(SynthRouteState_CLOSED),
 	qSynth(this),
 	audioDevice(NULL),
-	audioStream(NULL)
+	audioStream(NULL),
+	debugLastEventTimestamp(0)
 {
 	connect(&qSynth, SIGNAL(stateChanged(SynthState)), SLOT(handleQSynthState(SynthState)));
 }
@@ -68,13 +69,21 @@ bool SynthRoute::open() {
 	}
 	setState(SynthRouteState_OPENING);
 	if (audioDevice != NULL) {
-		if (qSynth.open()) {
-			audioStream = audioDevice->startAudioStream(&qSynth, SAMPLE_RATE);
+		uint sampleRate = audioDevice->driver.getAudioSettings().sampleRate;
+		if (qSynth.open(sampleRate, audioDevice->driver.getAudioSettings().srcQuality)) {
+			double debugDeltaMean = sampleRate * (8.0 / MasterClock::MILLIS_PER_SECOND);
+			double debugDeltaLimit = debugDeltaMean * 0.01;
+			debugDeltaLowerLimit = qint64(floor(debugDeltaMean - debugDeltaLimit));
+			debugDeltaUpperLimit = qint64(ceil(debugDeltaMean + debugDeltaLimit));
+			qDebug() << "Using sample rate:" << sampleRate;
+
+			audioStream = audioDevice->startAudioStream(qSynth, sampleRate);
 			if (audioStream != NULL) {
 				setState(SynthRouteState_OPEN);
 				return true;
 			} else {
 				qDebug() << "Failed to start audioStream";
+				qSynth.close();
 			}
 		} else {
 			qDebug() << "Failed to open qSynth";
@@ -161,22 +170,64 @@ void SynthRoute::handleQSynthState(SynthState synthState) {
 	}
 }
 
-const QString SynthRoute::getPatchName(int partNum) const {
-	return qSynth.getPatchName(partNum);
+MidiRecorder *SynthRoute::getMidiRecorder() {
+	return &recorder;
 }
 
-const MT32Emu::Partial *SynthRoute::getPartial(int partialNum) const {
-	return qSynth.getPartial(partialNum);
+bool SynthRoute::connectSynth(const char *signal, const QObject *receiver, const char *slot) const {
+	return QObject::connect(&qSynth, signal, receiver, slot);
 }
 
-bool SynthRoute::pushMIDIShortMessage(Bit32u msg, qint64 refNanos) {
+bool SynthRoute::connectReportHandler(const char *signal, const QObject *receiver, const char *slot) const {
+	return QObject::connect(qSynth.getReportHandler(), signal, receiver, slot);
+}
+
+// QSynth delegation
+
+bool SynthRoute::pushMIDIShortMessage(Bit32u msg, MasterClockNanos refNanos) {
 	recorder.recordShortMessage(msg, refNanos);
-	return qSynth.pushMIDIShortMessage(msg, refNanos);
+	AudioStream *stream = audioStream;
+	if (stream == NULL) return false;
+	quint64 timestamp = stream->estimateMIDITimestamp(refNanos);
+	if (msg == 0) {
+		// This is a special event sent by the test driver
+		qint64 delta = qint64(timestamp - debugLastEventTimestamp);
+		MasterClockNanos debugEventNanoOffset = (refNanos == 0) ? 0 : MasterClock::getClockNanos() - refNanos;
+		if ((delta < debugDeltaLowerLimit) || (debugDeltaUpperLimit < delta) || ((15 * MasterClock::NANOS_PER_MILLISECOND) < debugEventNanoOffset)) {
+			qDebug() << "M" << delta << timestamp << 1e-6 * debugEventNanoOffset;
+		}
+		debugLastEventTimestamp = timestamp;
+		return false;
+	}
+	return qSynth.playMIDIShortMessage(msg, timestamp);
 }
 
-bool SynthRoute::pushMIDISysex(Bit8u *sysexData, unsigned int sysexLen, qint64 refNanos) {
+bool SynthRoute::pushMIDISysex(const Bit8u *sysexData, unsigned int sysexLen, MasterClockNanos refNanos) {
 	recorder.recordSysex(sysexData, sysexLen, refNanos);
-	return qSynth.pushMIDISysex(sysexData, sysexLen, refNanos);
+	AudioStream *stream = audioStream;
+	if (stream == NULL) return false;
+	quint64 timestamp = stream->estimateMIDITimestamp(refNanos);
+	return qSynth.playMIDISysex(sysexData, sysexLen, timestamp);
+}
+
+void SynthRoute::flushMIDIQueue() {
+	qSynth.flushMIDIQueue();
+}
+
+void SynthRoute::playMIDIShortMessageNow(Bit32u msg) {
+	qSynth.playMIDIShortMessageNow(msg);
+}
+
+void SynthRoute::playMIDISysexNow(const Bit8u *sysex, Bit32u sysexLen) {
+	qSynth.playMIDISysexNow(sysex, sysexLen);
+}
+
+bool SynthRoute::playMIDIShortMessage(Bit32u msg, quint64 timestamp) {
+	return qSynth.playMIDIShortMessage(msg, timestamp);
+}
+
+bool SynthRoute::playMIDISysex(const Bit8u *sysex, Bit32u sysexLen, quint64 timestamp) {
+	return qSynth.playMIDISysex(sysex, sysexLen, timestamp);
 }
 
 void SynthRoute::setMasterVolume(int masterVolume) {
@@ -203,12 +254,44 @@ void SynthRoute::setReverbSettings(int reverbMode, int reverbTime, int reverbLev
 	qSynth.setReverbSettings(reverbMode, reverbTime, reverbLevel);
 }
 
+void SynthRoute::setReversedStereoEnabled(bool enabled) {
+	qSynth.setReversedStereoEnabled(enabled);
+}
+
+void SynthRoute::setNiceAmpRampEnabled(bool enabled) {
+	qSynth.setNiceAmpRampEnabled(enabled);
+}
+
+void SynthRoute::resetMIDIChannelsAssignment(bool engageChannel1) {
+	qSynth.resetMIDIChannelsAssignment(engageChannel1);
+}
+
+void SynthRoute::setInitialMIDIChannelsAssignment(bool engageChannel1) {
+	qSynth.setInitialMIDIChannelsAssignment(engageChannel1);
+}
+
+void SynthRoute::setReverbCompatibilityMode(ReverbCompatibilityMode reverbCompatibilityMode) {
+	qSynth.setReverbCompatibilityMode(reverbCompatibilityMode);
+}
+
+void SynthRoute::setMIDIDelayMode(MIDIDelayMode midiDelayMode) {
+	qSynth.setMIDIDelayMode(midiDelayMode);
+}
+
 void SynthRoute::setDACInputMode(DACInputMode emuDACInputMode) {
 	qSynth.setDACInputMode(emuDACInputMode);
 }
 
-MidiRecorder *SynthRoute::getMidiRecorder() {
-	return &recorder;
+void SynthRoute::setAnalogOutputMode(AnalogOutputMode analogOutputMode) {
+	qSynth.setAnalogOutputMode(analogOutputMode);
+}
+
+void SynthRoute::setRendererType(RendererType rendererType) {
+	qSynth.setRendererType(rendererType);
+}
+
+void SynthRoute::setPartialCount(int partialCount) {
+	qSynth.setPartialCount(partialCount);
 }
 
 void SynthRoute::getSynthProfile(SynthProfile &synthProfile) const {
@@ -219,10 +302,38 @@ void SynthRoute::setSynthProfile(const SynthProfile &synthProfile, QString useSy
 	qSynth.setSynthProfile(synthProfile, useSynthProfileName);
 }
 
-bool SynthRoute::connectSynth(const char *signal, const QObject *receiver, const char *slot) const {
-	return QObject::connect(&qSynth, signal, receiver, slot);
+void SynthRoute::getROMImages(const MT32Emu::ROMImage *&controlROMImage, const MT32Emu::ROMImage *&pcmROMImage) const {
+	qSynth.getROMImages(controlROMImage, pcmROMImage);
 }
 
-bool SynthRoute::connectReportHandler(const char *signal, const QObject *receiver, const char *slot) const {
-	return QObject::connect(qSynth.getReportHandler(), signal, receiver, slot);
+unsigned int SynthRoute::getPartialCount() const {
+	return qSynth.getPartialCount();
+}
+
+const QString SynthRoute::getPatchName(int partNum) const {
+	return qSynth.getPatchName(partNum);
+}
+
+void SynthRoute::getPartStates(bool *partStates) const {
+	qSynth.getPartStates(partStates);
+}
+
+void SynthRoute::getPartialStates(PartialState *partialStates) const {
+	qSynth.getPartialStates(partialStates);
+}
+
+unsigned int SynthRoute::getPlayingNotes(unsigned int partNumber, MT32Emu::Bit8u *keys, MT32Emu::Bit8u *velocities) const {
+	return qSynth.getPlayingNotes(partNumber, keys, velocities);
+}
+
+void SynthRoute::startRecordingAudio(const QString &fileName) {
+	qSynth.startRecordingAudio(fileName);
+}
+
+void SynthRoute::stopRecordingAudio() {
+	qSynth.stopRecordingAudio();
+}
+
+bool SynthRoute::isRecordingAudio() const {
+	return qSynth.isRecordingAudio();
 }

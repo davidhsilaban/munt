@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -28,12 +28,11 @@ TestProcessor::TestProcessor(TestMidiDriver *useTestMidiDriver) : testMidiDriver
 
 void TestProcessor::start() {
 	stopProcessing = false;
-	QThread::start();
+	QThread::start(QThread::TimeCriticalPriority);
 }
 
 void TestProcessor::stop() {
 	stopProcessing = true;
-	MidiDriver::waitForProcessingThread(this, TEST1_EVENT_INTERVAL_NANOS);
 }
 
 void TestProcessor::run() {
@@ -69,6 +68,7 @@ void TestMidiDriver::start() {
 
 void TestMidiDriver::stop() {
 	processor.stop();
+	MidiDriver::waitForProcessingThread(processor, TEST1_EVENT_INTERVAL_NANOS);
 }
 
 TestMidiDriver::~TestMidiDriver() {

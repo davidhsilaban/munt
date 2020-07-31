@@ -1,6 +1,7 @@
 /* Copyright (C) 2003 Tristan
  * Copyright (C) 2004, 2005 Tristan, Jerome Fisher
  * Copyright (C) 2008, 2011 Tristan, Jerome Fisher, Jörg Walter
+ * Copyright (C) 2013-2017 Tristan, Jerome Fisher, Jörg Walter, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -28,42 +29,35 @@
 #include "alsadrv.h"
 #include "drvreport.h"
 
-int MT32Emu_Report(void *userData, MT32Emu::ReportType type, const void *reportData)
-{
-	switch (type)
-	{
-	case MT32Emu::ReportType_errorControlROM:
-		fprintf(stderr, "Unable to open %sMT32_CONTROL.ROM: %d\n", rom_path, *((int *)reportData));
-		break;
-
-	case MT32Emu::ReportType_errorPCMROM:
-		fprintf(stderr, "Unable to open %sMT32_PCM.ROM: %d\n", rom_path, *((int *)reportData));
-		break;
-	
-	case MT32Emu::ReportType_lcdMessage:
-		printf("LCD: %s\n", (char *)reportData);
-		break;
-	
-	case MT32Emu::ReportType_newReverbMode:
-		rv_type  = *((MT32Emu::Bit8u *)reportData);
-		break;
-	case MT32Emu::ReportType_newReverbTime:
-		rv_time  = *((MT32Emu::Bit8u *)reportData);
-		break;
-	case MT32Emu::ReportType_newReverbLevel:
-		rv_level = *((MT32Emu::Bit8u *)reportData);
-		break;
-
-	case MT32Emu::ReportType_usingSSE:
-		printf("SSE detected and enabled\n");
-		break;
-		
-	case MT32Emu::ReportType_using3DNow:
-		printf("3DNow detected and enabled\n");
-		break;
+static class : public MT32Emu::ReportHandler {
+protected:
+	virtual void onErrorControlROM() {
+		fprintf(stderr, "Unable to open MT32 Control ROM file");
 	}
-	return 0;
-}
+
+	virtual void onErrorPCMROM() {
+		fprintf(stderr, "Unable to open MT32 PCM ROM file");
+	}
+
+	virtual void showLCDMessage(const char *message) {
+		printf("LCD: %s\n", message);
+	}
+
+	//virtual void printDebug(const char *fmt, va_list list) {}
+
+	virtual void onNewReverbMode(MT32Emu::Bit8u mode) {
+		rv_type = mode;
+	}
+
+	virtual void onNewReverbTime(MT32Emu::Bit8u time) {
+		rv_time = time;
+	}
+
+	virtual void onNewReverbLevel(MT32Emu::Bit8u level) {
+		rv_level = level;
+	}
+} mt32ReportHandlerImpl;
+MT32Emu::ReportHandler *mt32ReportHandler = &mt32ReportHandlerImpl;
 
 void report(int type, ...)
 {
@@ -101,6 +95,10 @@ void report(int type, ...)
 		fprintf(stderr, "MT-32 failed to load\n");
 		break;
 
+	case DRV_MT32ROMFAIL:
+		fprintf(stderr, "Unable to open MT32 %s ROM file\n", va_arg(ap, char *));
+		break;
+
 	case DRV_ERRPCM:
 		fprintf(stderr, "Could not open pcm device: %s\n", va_arg(ap, char *));
 		break;
@@ -136,6 +134,15 @@ void usage(char *argv[])
 	
 	printf("\n");
 	printf("-g factor    : Gain multiplier (default: 1.0) \n");
+	printf("-l mode      : Analog emulation mode (0 - Digital, 1 - Coarse,\n"
+	       "               2 - Accurate, 3 - Oversampled 2x, default: 2)\n");
+
+	printf("\n");
+	printf("-f romdir    : Directory with ROM files to load\n"
+	       "               (default: '/usr/share/mt32-rom-data/')\n");
+	printf("-o romsearch : Search algorithm to use when loading ROM files:\n"
+	       "               (0 - try both but CM32-L first, 1 - CM32-L only,\n"
+	       "                2 - MT-32 only, default: 0)\n");
 
 	printf("\n");
 	
@@ -147,7 +154,7 @@ int main(int argc, char **argv)
 {	
 	int reverb_switch = 1;
 	int i;
-	
+
 	/* parse the options */
 	for (i = 1; i < argc; i++)
 	{
@@ -206,6 +213,22 @@ int main(int argc, char **argv)
 			
 		    case 'g': i++; if (i == argc) usage(argv);
 			gain_multiplier = atof(argv[i]);
+			break;
+		    case 'l': i++; if (i == argc) usage(argv);
+			analog_output_mode = MT32Emu::AnalogOutputMode(atoi(argv[i]));
+			if (analog_output_mode < MT32Emu::AnalogOutputMode_DIGITAL_ONLY
+					|| MT32Emu::AnalogOutputMode_OVERSAMPLED < analog_output_mode) usage(argv);
+			sample_rate = MT32Emu::Synth::getStereoOutputSampleRate(analog_output_mode);
+			break;
+
+		    case 'f': i++; if (i == argc) usage(argv);
+			rom_dir = new char[strlen(argv[i]) + 1];
+			strcpy(rom_dir, argv[i]);
+			break;
+		    case 'o': i++; if (i == argc) usage(argv);
+			rom_search_type = rom_search_type_t(atoi(argv[i]));
+			if (rom_search_type < ROM_SEARCH_TYPE_DEFAULT
+					|| ROM_SEARCH_TYPE_MT32_ONLY < rom_search_type) usage(argv);
 			break;
 
 		    default:

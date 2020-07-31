@@ -13,8 +13,11 @@ class MidiPropertiesDialog;
 class QDropEvent;
 
 class Master : public QObject {
+friend int main(int argv, char **args);
 	Q_OBJECT
 private:
+	static void showCommandLineHelp();
+
 	QList<SynthRoute *> synthRoutes;
 	QList<AudioDriver *> audioDrivers;
 	QList<const AudioDevice *> audioDevices;
@@ -29,21 +32,23 @@ private:
 	QString defaultAudioDeviceName;
 	qint64 lastAudioDeviceScan;
 
-	bool stopping;
+	unsigned int maxSessions;
 
-	void init();
+	explicit Master();
+	explicit Master(Master &);
 	~Master();
 
 	void initAudioDrivers();
 	void initMidiDrivers();
 	const AudioDevice *findAudioDevice(QString driverId, QString name) const;
-	const QString getROMPathName(const QDir &romDir, QString romFileName) const;
-	void makeROMImages(SynthProfile &synthProfile);
 	SynthRoute *startSynthRoute();
 
 public:
 	static Master *getInstance();
 	static void isSupportedDropEvent(QDropEvent *e);
+	static QStringList parseMidiListFromUrls(const QList<QUrl> urls);
+	static QStringList parseMidiListFromPathName(const QString pathName);
+	static const QString getROMPathName(const QDir &romDir, QString romFileName);
 
 	// May only be called from the application thread
 	const QList<const AudioDevice *> getAudioDevices();
@@ -54,7 +59,9 @@ public:
 	const QStringList enumSynthProfiles() const;
 	void loadSynthProfile(SynthProfile &synthProfile, QString name);
 	void storeSynthProfile(const SynthProfile &synthProfile, QString name) const;
-	void freeROMImages(const MT32Emu::ROMImage* &controlROMImage, const MT32Emu::ROMImage* &pcmROMImage);
+	void findROMImages(const SynthProfile &synthProfile, const MT32Emu::ROMImage *&controlROMImage, const MT32Emu::ROMImage *&pcmROMImage) const;
+	void freeROMImages(const MT32Emu::ROMImage *&controlROMImage, const MT32Emu::ROMImage *&pcmROMImage) const;
+	bool handleROMSLoadFailed(QString usedSynthProfileName);
 	QSystemTrayIcon *getTrayIcon() const;
 	QSettings *getSettings() const;
 	bool isPinned(const SynthRoute *synthRoute) const;
@@ -75,15 +82,17 @@ private slots:
 	void createMidiSession(MidiSession **returnVal, MidiDriver *midiDriver, QString name);
 	void deleteMidiSession(MidiSession *midiSession);
 	void showBalloon(const QString &title, const QString &text);
-	void aboutToQuit();
+	void updateMainWindowTitleContribution(const QString &titleContribution);
 
 signals:
 	void synthRouteAdded(SynthRoute *route, const AudioDevice *audioDevice);
 	void synthRouteRemoved(SynthRoute *route);
 	void synthRoutePinned();
-	void romsNotSet();
+	void romsLoadFailed(bool &recoveryAttempted);
 	void playMidiFiles(const QStringList &);
 	void convertMidiFiles(const QStringList &);
+	void mainWindowTitleUpdated(const QString &);
+	void maxSessionsFinished();
 };
 
 #endif

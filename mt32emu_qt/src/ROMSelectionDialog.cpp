@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,9 +14,10 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QtGui>
+#include <QCheckBox>
+#include <QFileDialog>
 
-#include <mt32emu/ROMInfo.h>
+#include <mt32emu/mt32emu.h>
 
 #include "Master.h"
 #include "ROMSelectionDialog.h"
@@ -24,9 +25,7 @@
 
 using namespace MT32Emu;
 
-static const int CHECKBOX_COLUMN = 0;
 static const int FILENAME_COLUMN = 1;
-static const int ROM_TYPE_COLUMN = 4;
 
 ROMSelectionDialog::ROMSelectionDialog(SynthProfile &useSynthProfile, QWidget *parent) :
 		QDialog(parent),
@@ -97,9 +96,10 @@ void ROMSelectionDialog::refreshROMInfos() {
 	for (QStringListIterator it(dirEntries); it.hasNext();) {
 		QString fileName = it.next();
 		FileStream file;
-		if (!file.open((synthProfile.romDir.absolutePath() + QDir::separator() + fileName).toUtf8())) continue;
-		const ROMInfo &romInfo = *ROMInfo::getROMInfo(&file);
-		if (&romInfo == NULL) continue;
+		if (!file.open(Master::getROMPathName(synthProfile.romDir, fileName).toLocal8Bit())) continue;
+		const ROMInfo *romInfoPtr = ROMInfo::getROMInfo(&file);
+		if (romInfoPtr == NULL) continue;
+		const ROMInfo &romInfo = *romInfoPtr;
 
 		QButtonGroup *romGroup;
 		QString romType;
@@ -119,6 +119,7 @@ void ROMSelectionDialog::refreshROMInfos() {
 				romGroup = NULL;
 				break;
 			default:
+				MT32Emu::ROMInfo::freeROMInfo(romInfoPtr);
 				continue;
 		}
 
@@ -144,11 +145,11 @@ void ROMSelectionDialog::refreshROMInfos() {
 		item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 		ui->romInfoTable->setItem(row, column++, item);
 
-		item = new QTableWidgetItem(QString((const char *)romInfo.shortName));
+		item = new QTableWidgetItem(QString(romInfo.shortName));
 		item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 		ui->romInfoTable->setItem(row, column++, item);
 
-		item = new QTableWidgetItem(QString((const char *)romInfo.description));
+		item = new QTableWidgetItem(QString(romInfo.description));
 		item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 		ui->romInfoTable->setItem(row, column++, item);
 
@@ -156,10 +157,11 @@ void ROMSelectionDialog::refreshROMInfos() {
 		item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 		ui->romInfoTable->setItem(row, column++, item);
 
-		item = new QTableWidgetItem(QString((const char *)romInfo.sha1Digest));
+		item = new QTableWidgetItem(QString(romInfo.sha1Digest));
 		item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 		ui->romInfoTable->setItem(row, column++, item);
 
+		MT32Emu::ROMInfo::freeROMInfo(romInfoPtr);
 		row++;
 	}
 	ui->romInfoTable->setRowCount(row);

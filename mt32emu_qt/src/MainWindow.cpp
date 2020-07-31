@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,17 +15,15 @@
  */
 
 #include <QtGui>
+#include <QMessageBox>
 
 #ifdef WITH_WINCONSOLE
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0500
-#endif
+#if _WIN32_WINNT < 0x0500
+#undef WITH_WINCONSOLE
+#else // _WIN32_WINNT < 0x0500
 #include <windows.h>
-#endif
-
-#ifndef GIT_HASH
-#define GIT_HASH "Unknown"
-#endif
+#endif // _WIN32_WINNT < 0x0500
+#endif // defined(WITH_WINCONSOLE)
 
 #ifndef BUILD_DATE
 #ifdef __DATE__
@@ -57,9 +55,11 @@ MainWindow::MainWindow(Master *master, QWidget *parent) :
 	connect(master, SIGNAL(synthRouteAdded(SynthRoute *, const AudioDevice *)), SLOT(handleSynthRouteAdded(SynthRoute *, const AudioDevice *)));
 	connect(master, SIGNAL(synthRouteRemoved(SynthRoute *)), SLOT(handleSynthRouteRemoved(SynthRoute *)));
 	connect(master, SIGNAL(synthRoutePinned()), SLOT(refreshTabNames()));
-	connect(master, SIGNAL(romsNotSet()), SLOT(on_actionROM_Configuration_triggered()));
+	connect(master, SIGNAL(romsLoadFailed(bool &)), SLOT(handleROMSLoadFailed(bool &)), Qt::DirectConnection);
 	connect(master, SIGNAL(playMidiFiles(const QStringList &)), SLOT(handlePlayMidiFiles(const QStringList &)), Qt::QueuedConnection);
 	connect(master, SIGNAL(convertMidiFiles(const QStringList &)), SLOT(handleConvertMidiFiles(const QStringList &)), Qt::QueuedConnection);
+	connect(master, SIGNAL(mainWindowTitleUpdated(const QString &)), SLOT(setWindowTitle(const QString &)));
+	connect(master, SIGNAL(maxSessionsFinished()), SLOT(on_actionExit_triggered()));
 
 	if (master->getTrayIcon() != NULL) {
 		connect(master->getTrayIcon(), SIGNAL(activated(QSystemTrayIcon::ActivationReason)), SLOT(handleTrayIconActivated(QSystemTrayIcon::ActivationReason)));
@@ -75,7 +75,7 @@ MainWindow::MainWindow(Master *master, QWidget *parent) :
 	}
 
 #ifdef WITH_WINCONSOLE
-	if (!master->getSettings()->value("Master/showConsole", "0").toBool())
+	if (!master->getSettings()->value("Master/showConsole", false).toBool())
 		ShowWindow(GetConsoleWindow(), SW_HIDE);
 #endif
 }
@@ -86,6 +86,17 @@ MainWindow::~MainWindow()
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+	QSettings *settings = Master::getInstance()->getSettings();
+	if (settings->value("Master/hideToTrayOnClose", false).toBool()) {
+		event->ignore();
+		hide();
+	} else {
+		event->accept();
+		on_actionExit_triggered();
+	}
+}
+
+void MainWindow::on_actionExit_triggered() {
 	QSettings *settings = Master::getInstance()->getSettings();
 	settings->setValue("Master/mainWindowGeometry", geometry());
 	if (testMidiDriver != NULL) {
@@ -104,34 +115,34 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 		delete midiConverterDialog;
 		midiConverterDialog = NULL;
 	}
-	event->accept();
 	QApplication::quit();
 }
 
 void MainWindow::on_actionAbout_triggered()
 {
 	QMessageBox::about(this, "About",
-					   "Munt - Roland (R) MT-32 sound module emulator\n"
-					   "\n"
-					   "Version " VERSION "\n"
-					   "\n"
-					   "Build " GIT_HASH "\n"
-					   "Date " BUILD_DATE "\n"
-					   "\n"
-					   "Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev\n"
-					   "\n"
-					   "Licensed under GPL v3 or any later version."
-					   );
+		"Munt - Roland (R) MT-32 sound module emulator\n"
+		"\n"
+		"Munt mt32emu_qt GUI Application Version " APP_VERSION "\n"
+		"Munt Library Version " + QString(MT32Emu::Synth::getLibraryVersionString()) + "\n"
+		"Qt Library Version " + qVersion() + "\n"
+		"\n"
+		"Build Arch: " BUILD_SYSTEM " " + QString::number(QSysInfo::WordSize) + "-bit\n"
+		"Build Date: " BUILD_DATE "\n"
+		"\n"
+		"Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev\n"
+		"\n"
+		"Licensed under GPL v3 or any later version."
+	);
 }
 
 void MainWindow::refreshTabNames()
 {
 	QWidget *widget;
-	QString tabName;
 	for(int i = 0;; i++) {
 		widget = ui->synthTabs->widget(i);
 		if (widget == NULL) return;
-		tabName.sprintf("Synth &%i", i + 1);
+		QString tabName = QString("Synth &%1").arg(i + 1);
 		if (master->isPinned(((SynthWidget *)widget)->getSynthRoute())) tabName = tabName + " *";
 		ui->synthTabs->setTabText(i, tabName);
 	}
@@ -140,7 +151,7 @@ void MainWindow::refreshTabNames()
 void MainWindow::handleSynthRouteAdded(SynthRoute *synthRoute, const AudioDevice *audioDevice) {
 	SynthWidget *synthWidget = new SynthWidget(master, synthRoute, audioDevice, this);
 	int newTabIx = ui->synthTabs->count();
-	ui->synthTabs->addTab(synthWidget, QString().sprintf("Synth &%i", ui->synthTabs->count() + 1));
+	ui->synthTabs->addTab(synthWidget, QString("Synth &%1").arg(ui->synthTabs->count() + 1));
 	ui->synthTabs->setCurrentIndex(newTabIx);
 }
 
@@ -162,6 +173,9 @@ void MainWindow::handleSynthRouteRemoved(SynthRoute *synthRoute) {
 	}
 }
 
+void MainWindow::handleROMSLoadFailed(bool &recoveryAttempted) {
+	recoveryAttempted = showROMSelectionDialog();
+}
 
 void MainWindow::on_menuMIDI_aboutToShow() {
 	ui->actionNew_MIDI_port->setEnabled(master->canCreateMidiPort());
@@ -203,35 +217,43 @@ void MainWindow::on_actionConvert_MIDI_to_Wave_triggered() {
 }
 
 void MainWindow::on_menuOptions_aboutToShow() {
-	ui->actionStart_iconized->setChecked(master->getSettings()->value("Master/startIconized", "0").toBool());
-	ui->actionShow_LCD_balloons->setChecked(master->getSettings()->value("Master/showLCDBalloons", "1").toBool());
-	ui->actionShow_connection_balloons->setChecked(master->getSettings()->value("Master/showConnectionBalloons", "1").toBool());
+	ui->actionStart_iconized->setChecked(master->getSettings()->value("Master/startIconized", false).toBool());
+	ui->actionHide_to_tray_on_close->setChecked(master->getSettings()->value("Master/hideToTrayOnClose", false).toBool());
+	ui->actionShow_LCD_balloons->setChecked(master->getSettings()->value("Master/showLCDBalloons", true).toBool());
+	ui->actionShow_connection_balloons->setChecked(master->getSettings()->value("Master/showConnectionBalloons", true).toBool());
 }
 
 void MainWindow::on_actionStart_iconized_toggled(bool checked) {
-	master->getSettings()->setValue("Master/startIconized", QString().setNum(checked));
+	master->getSettings()->setValue("Master/startIconized", checked);
+}
+
+void MainWindow::on_actionHide_to_tray_on_close_toggled(bool checked) {
+	master->getSettings()->setValue("Master/hideToTrayOnClose", checked);
 }
 
 void MainWindow::on_actionShow_LCD_balloons_toggled(bool checked) {
-	master->getSettings()->setValue("Master/showLCDBalloons", QString().setNum(checked));
+	master->getSettings()->setValue("Master/showLCDBalloons", checked);
 }
 
 void MainWindow::on_actionShow_connection_balloons_toggled(bool checked) {
-	master->getSettings()->setValue("Master/showConnectionBalloons", QString().setNum(checked));
+	master->getSettings()->setValue("Master/showConnectionBalloons", checked);
 }
 
 void MainWindow::on_actionROM_Configuration_triggered() {
+	showROMSelectionDialog();
+}
+
+bool MainWindow::showROMSelectionDialog() {
 	Master &master = *Master::getInstance();
 	SynthProfile synthProfile;
-	synthProfile.controlROMImage = synthProfile.pcmROMImage = NULL;
-	master.disconnect(this, SLOT(on_actionROM_Configuration_triggered()));
 	master.loadSynthProfile(synthProfile, "");
-	connect(&master, SIGNAL(romsNotSet()), SLOT(on_actionROM_Configuration_triggered()));
 	ROMSelectionDialog rsd(synthProfile, this);
 	rsd.loadROMInfos();
 	if (rsd.exec() == QDialog::Accepted) {
 		master.storeSynthProfile(synthProfile, "");
+		return true;
 	}
+	return false;
 }
 
 void MainWindow::trayIconContextMenu() {
@@ -245,17 +267,17 @@ void MainWindow::trayIconContextMenu() {
 #ifdef WITH_WINCONSOLE
 	QAction *a = menu->addAction("Show console", this, SLOT(toggleShowConsole()));
 	a->setCheckable(true);
-	a->setChecked(master->getSettings()->value("Master/showConsole", "0").toBool());
+	a->setChecked(master->getSettings()->value("Master/showConsole", false).toBool());
 #endif
-	menu->addAction("Exit", this, SLOT(close()));
+	menu->addAction("Exit", this, SLOT(on_actionExit_triggered()));
 	master->getTrayIcon()->setContextMenu(menu);
 }
 
 void MainWindow::toggleShowConsole() {
 #ifdef WITH_WINCONSOLE
 	QSettings *s = master->getSettings();
-	bool b = !s->value("Master/showConsole", "0").toBool();
-	s->setValue("Master/showConsole", QString().setNum(b));
+	bool b = !s->value("Master/showConsole", false).toBool();
+	s->setValue("Master/showConsole", b);
 	ShowWindow(GetConsoleWindow(), b ? SW_NORMAL : SW_HIDE);
 #endif
 }
@@ -288,6 +310,7 @@ void MainWindow::handlePlayMidiFiles(const QStringList &fileList) {
 void MainWindow::handleConvertMidiFiles(const QStringList &fileList) {
 	qDebug() << "Converting:" << fileList;
 	on_actionConvert_MIDI_to_Wave_triggered();
+	connect(midiConverterDialog, SIGNAL(batchConversionFinished()), SLOT(on_actionExit_triggered()));
 	midiConverterDialog->startConversion(fileList);
 }
 

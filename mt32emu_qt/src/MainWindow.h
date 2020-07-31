@@ -38,12 +38,15 @@ private:
 	MidiPlayerDialog *midiPlayerDialog;
 	MidiConverterDialog *midiConverterDialog;
 
+	bool showROMSelectionDialog();
 	void trayIconContextMenu();
 
 private slots:
+	void on_actionExit_triggered();
 	void on_actionAbout_triggered();
 	void handleSynthRouteAdded(SynthRoute *synthRoute, const AudioDevice *audioDevice);
 	void handleSynthRouteRemoved(SynthRoute *synthRoute);
+	void handleROMSLoadFailed(bool &recoveryAttempted);
 	void on_menuMIDI_aboutToShow();
 	void on_actionNew_MIDI_port_triggered();
 	void on_actionTest_MIDI_Driver_toggled(bool checked);
@@ -51,6 +54,7 @@ private slots:
 	void on_actionConvert_MIDI_to_Wave_triggered();
 	void on_menuOptions_aboutToShow();
 	void on_actionStart_iconized_toggled(bool checked);
+	void on_actionHide_to_tray_on_close_toggled(bool checked);
 	void on_actionShow_LCD_balloons_toggled(bool checked);
 	void on_actionShow_connection_balloons_toggled(bool checked);
 	void on_actionROM_Configuration_triggered();

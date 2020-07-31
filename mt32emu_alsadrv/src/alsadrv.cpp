@@ -1,6 +1,7 @@
 /* Copyright (C) 2003 Tristan
  * Copyright (C) 2004, 2005 Tristan, Jerome Fisher
  * Copyright (C) 2008, 2011 Tristan, Jerome Fisher, Jörg Walter
+ * Copyright (C) 2013-2019 Tristan, Jerome Fisher, Jörg Walter, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -43,7 +44,7 @@ char *recwav_filename = NULL;
 FILE *recwav_file = NULL;
 
 #define PERC_CHANNEL  9 
-char rom_path[] = "/usr/share/mt32-rom-data/";
+const char default_rom_dir[] = "/usr/share/mt32-rom-data/";
 
 #include <mt32emu/mt32emu.h>
 
@@ -68,15 +69,40 @@ int uicmd_pipe[2];
 #define MINPROCESS_SIZE  16
 #define URUN_MAX         2
 
+class SysexHandler : public MT32Emu::MidiStreamParser {
+public:
+	explicit SysexHandler(MT32Emu::Synth &useSynth) : synth(useSynth) {}
+
+	void handleSystemRealtimeMessage(const MT32Emu::Bit8u realtime) { /* Not interesting */ }
+	void handleShortMessage(const MT32Emu::Bit32u message) { /* Not interesting */ }
+
+	void handleSysex(const MT32Emu::Bit8u stream[], const MT32Emu::Bit32u length) {
+		synth.playSysex(stream, length);
+	}
+
+	void printDebug(const char *debugMessage) {
+		printf("SysexHandler: %s\n", debugMessage);
+	}
+
+private:
+	MT32Emu::Synth &synth;
+};
 
 MT32Emu::Synth *mt32;
+SysexHandler *sysexHandler;
 snd_seq_t *seq_handle = NULL;
 
 
 /* Buffer infomation */
-#define FRAGMENT_SIZE 1024
-//#define PERIOD_SIZE   1024
-#define PERIOD_SIZE   512
+#define FRAGMENT_SIZE 256 // 2 milliseconds
+#define PERIOD_SIZE   128 // 1 millisecond
+
+MT32Emu::AnalogOutputMode analog_output_mode = MT32Emu::AnalogOutputMode_ACCURATE;
+unsigned int sample_rate = 48000;
+
+char *rom_dir = NULL;
+enum rom_search_type_t rom_search_type;
+
 int buffermsec = 100;
 int minimum_msec = 40;
 int maximum_msec = 1500;
@@ -89,7 +115,7 @@ int events_qd = 0;
 
 int tempo = -1, ppq = -1;
 double timepertick = -1;
-double bytespermsec = (double)(44100 * 2 * 2) / 1000000.0;
+double bytespermsec = (double)(sample_rate * 2 * 2) / 1000000.0;
 
 int channelmap[16];
 int channeluse[16];
@@ -105,14 +131,14 @@ snd_pcm_hw_params_t *pcm_hwparams;
 // char *pcm_name = "plughw:0,0";
 char *pcm_name = "default";
 
-double gain_multiplier = 1.0d;
+double gain_multiplier = 1.0;
 
 /* midi queue control variables */
 int flush_events = 0;
 
 
 /* template for reverb sysex events */
-char rvsysex[] = {
+MT32Emu::Bit8u rvsysex[] = {
 	0xf0, 0x41, 0x10, 0x16, 0x12, 
 		0x10, 0x00, 0x01, /* system area address */
 		0x00,       /* data */
@@ -143,7 +169,7 @@ int alsa_set_buffer_time(int msec)
 	unsigned int v, rate, periods;
 	double sec, tpp;
 	
-	rate = 44100;
+	rate = sample_rate;
 	channels = 2;
 	sec = (double)msec / 1000.0;
 	
@@ -160,7 +186,7 @@ int alsa_set_buffer_time(int msec)
 	}
 			
 	/* Set sample format */
-	err = snd_pcm_hw_params_set_format(pcm_handle, pcm_hwparams, SND_PCM_FORMAT_S16_LE);
+	err = snd_pcm_hw_params_set_format(pcm_handle, pcm_hwparams, SND_PCM_FORMAT_S16);
 	if (err < 0) 
 	{
 		fprintf(stderr, "Error setting format: %s\n", snd_strerror(err));
@@ -267,7 +293,7 @@ int alsa_init_pcm(unsigned int rate, int channels)
 		return -1;
 	}
 	
-	/* allow the transfer when at least FRAGMENT_SIZE samples can be processed */
+	/* allow the transfer when at least PERIOD_SIZE samples can be processed */
 	err = snd_pcm_sw_params_set_avail_min(pcm_handle, swparams, PERIOD_SIZE >> 2);
 	if (err < 0) {
 		printf("Unable to set avail min for playback: %s\n", snd_strerror(err));
@@ -346,6 +372,7 @@ void write_wav_header(FILE *f)
 	fwrite(wav_header, 1, 44, f);
 }
 
+/*
 static inline int time_to_offset(struct timeval ot, struct timeval nt)
 {
 	double ct;
@@ -358,6 +385,7 @@ static inline int time_to_offset(struct timeval ot, struct timeval nt)
 	offset = (int)(ct * bytespermsec);
 	return offset;
 }
+*/
 
 static inline struct timeval get_time()
 {
@@ -571,6 +599,51 @@ static inline void get_msg(snd_seq_event_t *seq_ev, midiev_t *ev)
 		ev->type = EVENT_MIDI;
 		return;
 		
+	    case SND_SEQ_EVENT_CONTROL14:
+		// The real hardware units don't support any of LSB controllers,
+		// so we just send the MSB silently ignoring the LSB
+		if ((seq_ev->data.control.param & 0xE0) == 0x20) {
+			ev->type = EVENT_NONE;
+			return;
+		}
+
+		channel = seq_ev->data.control.channel;
+
+		ev->msg= 0xB0 | channel;
+		ev->msg|= seq_ev->data.control.param << 8;
+		ev->msg|= (seq_ev->data.control.value >> 7) << 16;
+		debug_msg("Controller 14-bit, channel:%d param:%d value:%d\n",
+		       seq_ev->data.control.channel, seq_ev->data.control.param,
+		       seq_ev->data.control.value);
+		ev->type = EVENT_MIDI;
+		return;
+
+	    case SND_SEQ_EVENT_NONREGPARAM:
+		// The real hardware units don't support NRPNs
+		ev->type = EVENT_NONE;
+		return;
+
+	    case SND_SEQ_EVENT_REGPARAM:
+		// The real hardware units support only RPN 0 (pitch bender range) and only MSB matters
+		if (seq_ev->data.control.param == 0) {
+			unsigned int *msg_buffer = new unsigned int[3];
+			unsigned int msg = (0x0000B0 | seq_ev->data.control.channel);
+			msg_buffer[0] = msg | 0x006400;
+			msg_buffer[1] = msg | 0x006500;
+			msg_buffer[2] = msg | 0x000600 | ((seq_ev->data.control.value >> 7) & 0x7F) << 16;
+
+			debug_msg("RPN: channel:%d param:%d value:%d\n",
+				   seq_ev->data.control.channel, seq_ev->data.control.param,
+				   seq_ev->data.control.value);
+
+			ev->type = EVENT_MIDI_TRIPLET;
+			ev->sysex_len = 3 * sizeof(unsigned int);
+			ev->sysex = msg_buffer;
+		} else {
+			ev->type = EVENT_NONE;
+		}
+		return;
+
 	    case SND_SEQ_EVENT_PGMCHANGE:
 		channel = seq_ev->data.control.channel;
 		
@@ -605,7 +678,7 @@ static inline void get_msg(snd_seq_event_t *seq_ev, midiev_t *ev)
 		return;
 		
 	    case SND_SEQ_EVENT_SYSEX:
-		debug_msg("Sending SysEX of size %d\n", seq_ev->data.ext.len);				
+		debug_msg("SysEx (fragment) of size %d\n", seq_ev->data.ext.len);
 
 		ev->type = EVENT_SYSEX;
 		ev->sysex_len = seq_ev->data.ext.len;
@@ -829,7 +902,7 @@ int init_alsadrv()
 		exit(1);
 			
 	/* create pcm thread if needed */
-	alsa_init_pcm(44100, 2);		    
+	alsa_init_pcm(sample_rate, 2);
 		
 	/* create communication pipe from alsa reader to processor */
 	if (socketpair(PF_LOCAL, SOCK_STREAM, 0, eventpipe))
@@ -867,49 +940,94 @@ int init_alsadrv()
 	return 0;
 }
 
+static bool tryROMFile(const char romDir[], const char filename[], MT32Emu::FileStream &romFile) {
+	static const int MAX_PATH_LENGTH = 4096;
+
+	if ((strlen(romDir) + strlen(filename) + 1) > MAX_PATH_LENGTH) {
+		return false;
+	}
+	char romPathName[MAX_PATH_LENGTH];
+	strcpy(romPathName, romDir);
+	strcat(romPathName, filename);
+	return romFile.open(romPathName);
+}
+
+static void openROMFile(const char romDir[], const char romFile1[], const char romFile2[], MT32Emu::FileStream &romFile, const char romType[]) {
+	switch (rom_search_type) {
+	case ROM_SEARCH_TYPE_CM32L_ONLY:
+		if (!tryROMFile(romDir, romFile1, romFile)) {
+			report(DRV_MT32ROMFAIL, romType);
+			exit(1);
+		}
+		break;
+	case ROM_SEARCH_TYPE_MT32_ONLY:
+		if (!tryROMFile(romDir, romFile2, romFile)) {
+			report(DRV_MT32ROMFAIL, romType);
+			exit(1);
+		}
+		break;
+	default:
+		if (!tryROMFile(romDir, romFile1, romFile)) {
+			if (!tryROMFile(romDir, romFile2, romFile)) {
+				report(DRV_MT32ROMFAIL, romType);
+				exit(1);
+			}
+		}
+		break;
+	}
+}
+
 void reload_mt32_core(int rv)
 {
-	MT32Emu::SynthProperties synthp;
-	memset(&synthp, 0, sizeof(synthp));
-
 	/* delete core if there is already an instance of it */
 	if (mt32 != NULL)
 	{
+		delete sysexHandler;
 		delete mt32;
 		printf("Restarting MT-32 core\n");
 		report(DRV_M32RESET);
 	} else 
 		printf("Starting MT-32 core\n");
 	
-	/* create MT32Synth object */
-	mt32 = new MT32Emu::Synth();
+	// create ROM images
+	MT32Emu::FileStream controlROMFile;
+	MT32Emu::FileStream pcmROMFile;
 
-	/* setup synth params */
-	synthp.sampleRate = 44100;
-	
-	if (rv)
-		synthp.useReverb = true;
-	else
-		synthp.useReverb = false;
-	
-	synthp.useDefaultReverb = false;
-	synthp.reverbType = rv_type;
-	synthp.reverbTime = rv_time;
-	synthp.reverbLevel = rv_level;
-	synthp.baseDir = rom_path;
-	synthp.report = MT32Emu_Report;
-	
-	if (mt32->open(synthp) == false) {
+	char romDir[4096];
+	if (rom_dir != NULL) {
+		strcpy(romDir, rom_dir);
+		strcat(romDir, "/");
+	} else {
+		strcpy(romDir, default_rom_dir);
+	}
+
+	openROMFile(romDir, "CM32L_CONTROL.ROM", "MT32_CONTROL.ROM", controlROMFile, "Control");
+	openROMFile(romDir, "CM32L_PCM.ROM", "MT32_PCM.ROM", pcmROMFile, "PCM");
+
+	const MT32Emu::ROMImage *controlROMImage = MT32Emu::ROMImage::makeROMImage(&controlROMFile);
+	const MT32Emu::ROMImage *pcmROMImage = MT32Emu::ROMImage::makeROMImage(&pcmROMFile);
+
+	/* create MT32Synth object */
+	mt32 = new MT32Emu::Synth(mt32ReportHandler);
+	if (mt32->open(*controlROMImage, *pcmROMImage, analog_output_mode) == false) {
 		report(DRV_MT32FAIL);
 		exit(1);
-	}	
+	}
+	sysexHandler = new SysexHandler(*mt32);
 
-	mt32->setOutputGain(1.0f * gain_multiplier);
-	mt32->setReverbOutputGain(0.68f * gain_multiplier);
+	MT32Emu::ROMImage::freeROMImage(controlROMImage);
+	MT32Emu::ROMImage::freeROMImage(pcmROMImage);
 
+	send_rvmode_sysex(rv_type);
+	send_rvtime_sysex(rv_time);
+	send_rvlevel_sysex(rv_level);
+
+	mt32->setReverbEnabled(rv);
+	mt32->setOutputGain(gain_multiplier);
+	mt32->setReverbOutputGain(gain_multiplier);
 }
 
-int process_loop(int rv) 
+int process_loop(int rv)
 {
 	unsigned char processbuffer[FRAGMENT_SIZE];
 	unsigned int msg;
@@ -923,12 +1041,13 @@ int process_loop(int rv)
 	snd_pcm_state_t pcmstate;
 	
 	mt32 = NULL;
+	sysexHandler = NULL;
 	rv_type = 0;
 	rv_time = 5;
 	rv_level = 3;
 	consumer_types = 0;
 	
-	reload_mt32_core(rv);			
+	reload_mt32_core(rv);
 	
 	/* setup poll info */
 	event_poll.fd = eventpipe[0];
@@ -1042,6 +1161,15 @@ int process_loop(int rv)
 			mt32->playMsg(newev.msg);    
 			break;
 			
+		    case EVENT_MIDI_TRIPLET: {
+			unsigned int *msg_buffer = (unsigned int *)newev.sysex;
+			for(int i = 0; i < 3; i++) {
+				mt32->playMsg(msg_buffer[i]);
+			}
+			delete[] msg_buffer;
+			break;
+		    }
+
 		    case EVENT_SYSEX:
 			/* record it if needed */
 			if (consumer_types & CONSUME_SYSEX)
@@ -1049,7 +1177,7 @@ int process_loop(int rv)
 				fwrite((unsigned char *)newev.sysex, 1, newev.sysex_len, recsyx_file);
 				fflush(recsyx_file);
 			}			
-			mt32->playSysex((MT32Emu::Bit8u *)newev.sysex, newev.sysex_len);			
+			sysexHandler->parseStream((MT32Emu::Bit8u *) newev.sysex, newev.sysex_len);
 			free(newev.sysex);
 			break;
 		
@@ -1057,24 +1185,24 @@ int process_loop(int rv)
 			rvsysex[7]  = 1;
 			rvsysex[8] = newev.msg;	
 			rvsysex[9] = 128-((rvsysex[5]+rvsysex[6]+rvsysex[7]+rvsysex[8])&127);
-			mt32->playSysex((MT32Emu::Bit8u *)rvsysex, 11);			
+			mt32->playSysex(rvsysex, 11);
 			break;
 		    case EVENT_SET_RVTIME:			
 			rvsysex[7]  = 2;
 			rvsysex[8] = newev.msg;	
 			rvsysex[9] = 128-((rvsysex[5]+rvsysex[6]+rvsysex[7]+rvsysex[8])&127);
-			mt32->playSysex((MT32Emu::Bit8u *)rvsysex, 11);
+			mt32->playSysex(rvsysex, 11);
 			break;
 		    case EVENT_SET_RVLEVEL:			
 			rvsysex[7]  = 3;
 			rvsysex[8] = newev.msg;	
 			rvsysex[9] = 128-((rvsysex[5]+rvsysex[6]+rvsysex[7]+rvsysex[8])&127);
-			mt32->playSysex((MT32Emu::Bit8u *)rvsysex, 11);
+			mt32->playSysex(rvsysex, 11);
 			break;
 		
 		    case EVENT_RESET:
 			reload_mt32_core(rv);
-			break;			
+			break;
 			
 		    case EVENT_WAVREC_ON:
 			start_recordwav();

@@ -17,28 +17,22 @@ class QtAudioStream : public AudioStream {
 	friend class WaveGenerator;
 private:
 	QAudioOutput *audioOutput;
+	QThread *processingThread;
 	WaveGenerator *waveGenerator;
 
-	unsigned int sampleRate;
-
-	// The number of nanos by which to delay (MIDI) events to help ensure accurate relative timing.
-	unsigned int midiLatency;
-	unsigned int audioLatency;
-	bool advancedTiming;
-
 public:
-	QtAudioStream(const AudioDevice *device, QSynth *useSynth, unsigned int useSampleRate);
+	QtAudioStream(const AudioDriverSettings &useSettings, QSynth &useSynth, const quint32 useSampleRate);
 	~QtAudioStream();
-	bool start();
+	void start();
 	void close();
 };
 
 class QtAudioDefaultDevice : public AudioDevice {
 	friend class QtAudioDriver;
 private:
-	QtAudioDefaultDevice(QtAudioDriver * const driver);
+	QtAudioDefaultDevice(QtAudioDriver &driver);
 public:
-	QtAudioStream *startAudioStream(QSynth *synth, unsigned int sampleRate) const;
+	AudioStream *startAudioStream(QSynth &synth, const uint sampleRate) const;
 };
 
 class QtAudioDriver : public AudioDriver {
@@ -46,7 +40,6 @@ private:
 	void validateAudioSettings(AudioDriverSettings &settings) const;
 public:
 	QtAudioDriver(Master *useMaster);
-	~QtAudioDriver();
 	const QList<const AudioDevice *> createDeviceList();
 };
 

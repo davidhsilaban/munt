@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -53,7 +53,7 @@ void MidiDriver::deleteMidiSession(MidiSession *midiSession) {
 }
 
 void MidiDriver::showBalloon(const QString &title, const QString &text) {
-	if (master->getSettings()->value("Master/showConnectionBalloons", "1").toBool()) {
+	if (master->getSettings()->value("Master/showConnectionBalloons", true).toBool()) {
 		emit balloonMessageAppeared(title, text);
 	}
 }
@@ -88,8 +88,8 @@ QString MidiDriver::getNewPortName(MidiPropertiesDialog *) {
  * On the other hand, stop() is usually called in the main thread - the thread of Master. So, we attempt to unblock
  * by processing posted QEvent::MetaCall events directed to Master.
  */
-void MidiDriver::waitForProcessingThread(QThread *thread, MasterClockNanos timeout) {
-	while (!thread->wait(timeout / MasterClock::NANOS_PER_MILLISECOND)) {
+void MidiDriver::waitForProcessingThread(QThread &thread, MasterClockNanos timeout) {
+	while (!thread.wait(timeout / MasterClock::NANOS_PER_MILLISECOND)) {
 		Master *master = Master::getInstance();
 		if (QThread::currentThread() == master->thread()) {
 			QCoreApplication::sendPostedEvents(master, QEvent::MetaCall);

@@ -17,20 +17,30 @@ private:
 
 public:
 	~Win32MidiIn();
-	bool open(SynthRoute *synthRoute, unsigned int midiDevID);
+	bool open(MidiSession *midiSession, unsigned int midiDevID);
 	bool close();
 	UINT getID();
 };
 
+class Win32MidiInProcessor : public QThread {
+	Q_OBJECT
+
+protected:
+	void run();
+};
+
 class Win32MidiDriver : public MidiDriver {
+	friend class Win32MidiInProcessor;
 private:
 	static LRESULT CALLBACK midiInProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-	static void messageLoop(void *);
-	static MasterClockNanos timeToMasterClockNanos(MasterClockNanos time);
 	static void enumPorts(QList<QString> &midiInPortNames);
 
+	Win32MidiInProcessor midiInProcessor;
+	QList<unsigned int> midiSessionIDs;
 	QList<Win32MidiIn *> midiInPorts;
 	QList<MidiSession *> midiInSessions;
+
+	MidiSession *findMidiSession(quint32 midiSessionID);
 
 public:
 	Win32MidiDriver(Master *useMaster);

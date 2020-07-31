@@ -3,9 +3,13 @@
 
 #include <QtCore>
 
+#include <mt32emu/mt32emu.h>
+
 #include "SynthWidget.h"
 
 class SynthRoute;
+class QLabel;
+
 namespace Ui {
 	class SynthWidget;
 }
@@ -89,21 +93,32 @@ public:
 
 private:
 	const SynthRoute * const synthRoute;
-	QTimer timer;
 
 	const Ui::SynthWidget * const ui;
 	LCDWidget lcdWidget;
 	LEDWidget midiMessageLED;
-	LEDWidget *partialStateLED[MT32EMU_DEFAULT_MAX_PARTIALS];
+	LEDWidget **partialStateLED;
 	QLabel *patchNameLabel[9];
 	PartStateWidget *partStateWidget[9];
 
+	MT32Emu::PartialState *partialStates;
+	MT32Emu::Bit8u *keysOfPlayingNotes;
+	MT32Emu::Bit8u *velocitiesOfPlayingNotes;
+
+	MasterClockNanos midiMessageLEDStartNanos;
+	MasterClockNanos previousUpdateNanos;
+	bool enabled;
+	uint partialCount;
+
+	void allocatePartialsData();
+	void freePartialsData();
+
 private slots:
 	void handleUpdate();
-	void handleReset();
-	void handleMIDIMessagePushed();
+	void handleSynthStateChange(SynthState);
+	void handleMIDIMessagePlayed();
 	void handlePolyStateChanged(int partNum);
-	void handleProgramChanged(int partNum, int timbreGroup, QString patchName);
+	void handleProgramChanged(int partNum, QString soundGroupName, QString patchName);
 };
 
 #endif

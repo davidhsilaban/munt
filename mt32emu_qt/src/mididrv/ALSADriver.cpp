@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,54 +16,36 @@
 
 #include "ALSADriver.h"
 
-#include <QtCore>
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <signal.h>
-#include <string.h>
-#include <unistd.h>
+#include <cstdlib>
+#include <poll.h>
 #include <pthread.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <stdarg.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <math.h>
-
-#include <alsa/version.h>
-#include <alsa/asoundlib.h>
+#include <QtCore>
 
 #include "../MasterClock.h"
 #include "../MidiSession.h"
 #include "../SynthRoute.h"
 #include "../MidiPropertiesDialog.h"
 
-
-ALSAProcessor::ALSAProcessor(ALSAMidiDriver *useALSAMidiDriver, snd_seq_t *useSeq) : alsaMidiDriver(useALSAMidiDriver), seq(useSeq) {
-	stopProcessing = false;
+void *ALSAMidiDriver::processingThread(void *userData) {
+	ALSAMidiDriver *driver = (ALSAMidiDriver *)userData;
+	driver->processSeqEvents();
+	driver->processingThreadID = 0;
+	return NULL;
 }
 
-void ALSAProcessor::stop() {
-	stopProcessing = true;
-}
-
-void ALSAProcessor::processSeqEvents() {
+void ALSAMidiDriver::processSeqEvents() {
 	int pollFDCount;
 	struct pollfd *pollFDs;
 
-	pollFDCount = snd_seq_poll_descriptors_count(seq, POLLIN);
+	pollFDCount = snd_seq_poll_descriptors_count(snd_seq, POLLIN);
 	pollFDs = (struct pollfd *)malloc(pollFDCount * sizeof(struct pollfd));
-	snd_seq_poll_descriptors(seq, pollFDs, pollFDCount, POLLIN);
+	snd_seq_poll_descriptors(snd_seq, pollFDs, pollFDCount, POLLIN);
 	for (;;) {
 		// 200ms poll() timeout means that stopProcessing may take approximately this long to be noticed.
 		// FIXME: Polling with a timeout is lame.
 		int pollEventCount = poll(pollFDs, pollFDCount, 200);
 		if (pollEventCount < 0) {
-			qDebug() << "poll() returned " << pollEventCount << ", errno=" << errno;
+			qDebug() << "ALSAMidiDriver: poll() returned " << pollEventCount << ", errno=" << errno;
 			break;
 		}
 		if (stopProcessing) {
@@ -73,13 +55,13 @@ void ALSAProcessor::processSeqEvents() {
 			continue;
 		}
 		unsigned short revents = 0;
-		int err = snd_seq_poll_descriptors_revents(seq, pollFDs, pollFDCount, &revents);
+		int err = snd_seq_poll_descriptors_revents(snd_seq, pollFDs, pollFDCount, &revents);
 		if (err < 0) {
-			qDebug() << "snd_seq_poll_descriptors_revents() returned " << err;
+			qDebug() << "ALSAMidiDriver: snd_seq_poll_descriptors_revents() returned " << err;
 			break;
 		}
 		if ((revents & (POLLERR | POLLNVAL)) != 0) {
-			qDebug() << "snd_seq_poll_descriptors_revents() gave revents " << revents;
+			qDebug() << "ALSAMidiDriver: snd_seq_poll_descriptors_revents() gave revents " << revents;
 			break;
 		}
 		if ((revents & POLLIN) == 0) {
@@ -87,50 +69,50 @@ void ALSAProcessor::processSeqEvents() {
 		}
 		snd_seq_event_t *seq_event = NULL;
 		do {
-			int status = snd_seq_event_input(seq, &seq_event);
+			int status = snd_seq_event_input(snd_seq, &seq_event);
 			if (status < 0) {
 				switch (status) {
 				case -EAGAIN:
 				case -ENOSPC:
 					continue;
 				}
-				qDebug() << "Status: " << status;
+				qDebug() << "ALSAMidiDriver: Status: " << status;
 				break;
 			}
 			unsigned int clientAddr = getSourceAddr(seq_event);
 			MidiSession *midiSession = findMidiSessionForClient(clientAddr);
 			if (midiSession == NULL) {
 				QString appName = getClientName(clientAddr);
-				midiSession = alsaMidiDriver->createMidiSession(appName);
+				midiSession = createMidiSession(appName);
 				if (midiSession == NULL) {
-					qDebug() << "Can't create new Midi Session. Exiting...";
+					qDebug() << "ALSAMidiDriver: Can't create new MIDI Session. Exiting...";
 					break;
 				}
 				clients.append(clientAddr);
-				alsaMidiDriver->showBalloon("Connected application:", appName);
-				qDebug() << "Connected application" << appName;
+				showBalloon("Connected application:", appName);
+				qDebug() << "ALSAMidiDriver: Connected application" << appName;
 			}
 			if (processSeqEvent(seq_event, midiSession->getSynthRoute())) {
 				break;
 			}
-		} while (!stopProcessing && snd_seq_event_input_pending(seq, 1));
+		} while (!stopProcessing && snd_seq_event_input_pending(snd_seq, 1));
 	}
 	free(pollFDs);
-	snd_seq_close(seq);
-	qDebug() << "ALSA MIDI processing loop finished";
+	snd_seq_close(snd_seq);
+	qDebug() << "ALSAMidiDriver: MIDI processing loop finished";
 
-	QMutableListIterator<MidiSession *> midiSessionIt(alsaMidiDriver->midiSessions);
+	QMutableListIterator<MidiSession *> midiSessionIt(midiSessions);
 	while(midiSessionIt.hasNext()) {
 		MidiSession *midiSession = midiSessionIt.next();
 		if (midiSession != NULL) {
-			alsaMidiDriver->deleteMidiSession(midiSession);
+			deleteMidiSession(midiSession);
 		}
 	}
 	clients.clear();
-	emit finished();
+	stopProcessing = false;
 }
 
-unsigned int ALSAProcessor::getSourceAddr(snd_seq_event_t *seq_event) {
+unsigned int ALSAMidiDriver::getSourceAddr(snd_seq_event_t *seq_event) {
 	snd_seq_addr addr;
 	if (seq_event->type == SND_SEQ_EVENT_PORT_SUBSCRIBED || seq_event->type == SND_SEQ_EVENT_PORT_UNSUBSCRIBED)
 		addr = seq_event->data.connect.sender;
@@ -139,20 +121,20 @@ unsigned int ALSAProcessor::getSourceAddr(snd_seq_event_t *seq_event) {
 	return (addr.client << 8) | addr.port;
 }
 
-QString ALSAProcessor::getClientName(unsigned int clientAddr) {
+QString ALSAMidiDriver::getClientName(unsigned int clientAddr) {
 	snd_seq_client_info_t *info;
 	snd_seq_client_info_alloca(&info);
-	if (snd_seq_get_any_client_info(seq, clientAddr >> 8, info) != 0) return "Unknown ALSA session";
+	if (snd_seq_get_any_client_info(snd_seq, clientAddr >> 8, info) != 0) return "Unknown ALSA session";
 	return QString().setNum(clientAddr >> 8) + ":" + QString().setNum(clientAddr & 0xFF) + " " + snd_seq_client_info_get_name(info);
 }
 
-MidiSession * ALSAProcessor::findMidiSessionForClient(unsigned int clientAddr) {
+MidiSession *ALSAMidiDriver::findMidiSessionForClient(unsigned int clientAddr) {
 	int i = clients.indexOf(clientAddr);
 	if (i == -1) return NULL;
-	return alsaMidiDriver->midiSessions.at(i);
+	return midiSessions.at(i);
 }
 
-bool ALSAProcessor::processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synthRoute) {
+bool ALSAMidiDriver::processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synthRoute) {
 	MT32Emu::Bit32u msg = 0;
 	switch(seq_event->type) {
 	case SND_SEQ_EVENT_NOTEON:
@@ -180,31 +162,34 @@ bool ALSAProcessor::processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synt
 		break;
 
 	case SND_SEQ_EVENT_CONTROL14:
+		// The real hardware units don't support any of LSB controllers,
+		// so we just send the MSB silently ignoring the LSB
+		if ((seq_event->data.control.param & 0xE0) == 0x20) break;
 		msg = 0xB0;
 		msg |= seq_event->data.control.channel;
-		msg |= 0x06 << 8;
+		msg |= seq_event->data.control.param << 8;
 		msg |= (seq_event->data.control.value >> 7) << 16;
 		synthRoute->pushMIDIShortMessage(msg, MasterClock::getClockNanos());
 		break;
 
 	case SND_SEQ_EVENT_NONREGPARAM:
-		msg = 0xB0;
-		msg |= seq_event->data.control.channel;
-		msg |= 0x63 << 8; // Since the real synths don't support NRPNs, it's OK to send just the MSB
-		synthRoute->pushMIDIShortMessage(msg, MasterClock::getClockNanos());
+		// The real hardware units don't support NRPNs
 		break;
 
 	case SND_SEQ_EVENT_REGPARAM:
-		msg = 0xB0;
+		// The real hardware units support only RPN 0 (pitch bender range) and only MSB matters
+		if (seq_event->data.control.param != 0) break;
+		msg = 0x64B0;
 		msg |= seq_event->data.control.channel;
-		int rpn;
-		rpn = seq_event->data.control.value;
-		msg |= 0x64 << 8;
-		msg |= (rpn & 0x7F) << 16;
 		synthRoute->pushMIDIShortMessage(msg, MasterClock::getClockNanos());
+
 		msg &= 0xFF;
-		msg |= 0x65 << 8;
-		msg |= ((rpn >> 7) & 0x7F) << 16;
+		msg |= 0x6500;
+		synthRoute->pushMIDIShortMessage(msg, MasterClock::getClockNanos());
+
+		msg &= 0xFF;
+		msg |= 0x0600;
+		msg |= ((seq_event->data.control.value >> 7) & 0x7F) << 16;
 		synthRoute->pushMIDIShortMessage(msg, MasterClock::getClockNanos());
 		break;
 
@@ -226,8 +211,28 @@ bool ALSAProcessor::processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synt
 		break;
 
 	case SND_SEQ_EVENT_SYSEX:
-		synthRoute->pushMIDISysex((MT32Emu::Bit8u *)seq_event->data.ext.ptr, seq_event->data.ext.len, MasterClock::getClockNanos());
+	{
+		MT32Emu::Bit8u *sysexData = (MT32Emu::Bit8u *)seq_event->data.ext.ptr;
+		uint sysexLength = seq_event->data.ext.len;
+
+		if(sysexLength == 0) break; // no-op
+
+		// We may well get a SysEx fragment, so if this is the case, it's buffered and the full SysEx is reconstructed further on.
+		// If not, don't bother and take a shortcut.
+		bool hasSysexStart = sysexData[0] == MIDI_CMD_COMMON_SYSEX;
+		bool hasSysexEnd = sysexData[sysexLength - 1] == MIDI_CMD_COMMON_SYSEX_END;
+		if (hasSysexStart && hasSysexEnd) {
+			synthRoute->pushMIDISysex(sysexData, sysexLength, MasterClock::getClockNanos());
+			break;
+		}
+		// OK, accumulate SysEx data received so far and commit when ready.
+		sysexBuffer.append(sysexData, sysexLength);
+		if (hasSysexEnd) {
+			synthRoute->pushMIDISysex(sysexBuffer.constData(), sysexBuffer.size(), MasterClock::getClockNanos());
+			sysexBuffer.clear();
+		}
 		break;
+	}
 
 	case SND_SEQ_EVENT_PORT_SUBSCRIBED:
 		// no-op
@@ -237,18 +242,18 @@ bool ALSAProcessor::processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synt
 		clientAddr = getSourceAddr(seq_event);
 		MidiSession *midiSession;
 		midiSession = findMidiSessionForClient(clientAddr);
-		if (midiSession != NULL) alsaMidiDriver->deleteMidiSession(midiSession);
+		if (midiSession != NULL) deleteMidiSession(midiSession);
 		clients.removeAll(clientAddr);
 		break;
 
 	case SND_SEQ_EVENT_CLIENT_START:
-		printf("Client start\n");
+		qDebug() << "ALSAMidiDriver: Client start";
 		break;
 	case SND_SEQ_EVENT_CLIENT_CHANGE:
-		printf("Client change\n");
+		qDebug() << "ALSAMidiDriver: Client change";
 		break;
 	case SND_SEQ_EVENT_CLIENT_EXIT:
-		printf("Client exit\n");
+		qDebug() << "ALSAMidiDriver: Client exit";
 		return true;
 
 	case SND_SEQ_EVENT_NOTE:
@@ -261,77 +266,84 @@ bool ALSAProcessor::processSeqEvent(snd_seq_event_t *seq_event, SynthRoute *synt
 	return false;
 }
 
-static int alsa_setup_midi(snd_seq_t *&seq_handle)
-{
+int ALSAMidiDriver::alsa_setup_midi() {
 	int seqPort;
 
 	/* open sequencer interface for input */
-	if (snd_seq_open(&seq_handle, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
-		fprintf(stderr, "Error opening ALSA sequencer.\n");
+	if (snd_seq_open(&snd_seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
+		qDebug() << "ALSAMidiDriver: Error opening ALSA sequencer";
 		return -1;
 	}
 
-	snd_seq_set_client_name(seq_handle, "Munt MT-32");
-	seqPort = snd_seq_create_simple_port(seq_handle, "Standard",
+	snd_seq_set_client_name(snd_seq, "Munt MT-32");
+	seqPort = snd_seq_create_simple_port(snd_seq, "Standard",
 						SND_SEQ_PORT_CAP_SUBS_WRITE |
 						SND_SEQ_PORT_CAP_WRITE,
+						SND_SEQ_PORT_TYPE_MIDI_GENERIC |
 						SND_SEQ_PORT_TYPE_MIDI_MT32 |
-						SND_SEQ_PORT_TYPE_SYNTH);
+						SND_SEQ_PORT_TYPE_SYNTHESIZER);
 	if (seqPort < 0) {
-		fprintf(stderr, "Error creating sequencer port.\n");
+		qDebug() << "ALSAMidiDriver: Error creating sequencer port";
 		return -1;
 	}
-
-	printf("MT-32 emulator ALSA address is %d:0\n", snd_seq_client_id(seq_handle));
-
+	QString midiPortStr = QString().setNum(snd_seq_client_id(snd_seq)) + ":0";
+	qDebug() << "MT-32 emulator ALSA address is:" << midiPortStr;
+	emit mainWindowTitleContributionUpdated("ALSA MIDI Port " + midiPortStr);
 	return seqPort;
 }
 
-ALSAMidiDriver::ALSAMidiDriver(Master *useMaster) : MidiDriver(useMaster) {
-	processor = NULL;
-}
+ALSAMidiDriver::ALSAMidiDriver(Master *useMaster) : MidiDriver(useMaster), processingThreadID(0), rawMidiPortDriver(useMaster) {}
 
 ALSAMidiDriver::~ALSAMidiDriver() {
 	stop();
 }
 
 void ALSAMidiDriver::start() {
-	if (alsa_setup_midi(snd_seq) >= 0) {
-		processor = new ALSAProcessor(this, snd_seq);
-		processor->moveToThread(&processorThread);
-		// Yes, seriously. The QThread object's default thread is *this* thread,
-		// We move it to the thread that it represents so that the finished()->quit() connection
-		// will happen asynchronously and avoid a deadlock in the destructor.
-		processorThread.moveToThread(&processorThread);
-
-		// Start the processor once the thread has started
-		processor->connect(&processorThread, SIGNAL(started()), SLOT(processSeqEvents()));
-		// Stop the thread once the processor has finished
-		processorThread.connect(processor, SIGNAL(finished()), SLOT(quit()));
-
-		processorThread.start();
+	rawMidiPortDriver.start();
+	connect(this, SIGNAL(mainWindowTitleContributionUpdated(const QString &)), master, SLOT(updateMainWindowTitleContribution(const QString &)));
+	if (alsa_setup_midi() < 0) return;
+	stopProcessing = false;
+	int error = pthread_create(&processingThreadID, NULL, processingThread, this);
+	if (error != 0) {
+		processingThreadID = 0;
+		qDebug() << "ALSAMidiDriver: Processing Thread creation failed:" << error;
+		snd_seq_close(snd_seq);
 	}
 }
 
 void ALSAMidiDriver::stop() {
-	if (processor != NULL) {
-		if (processorThread.isRunning()) {
-			processor->stop();
-			processorThread.wait();
-		}
-		delete processor;
-		processor = NULL;
-	}
+	rawMidiPortDriver.stop();
+	if (processingThreadID == 0) return;
+	qDebug() << "ALSAMidiDriver: Stopping MIDI processing loop...";
+	stopProcessing = true;
+	pthread_join(processingThreadID, NULL);
+	processingThreadID = 0;
 }
 
-bool ALSAMidiDriver::canSetPortProperties(MidiSession *) {
-	return true;
+bool ALSAMidiDriver::canCreatePort() {
+	return rawMidiPortDriver.canCreatePort();
 }
 
-bool ALSAMidiDriver::setPortProperties(MidiPropertiesDialog *mpd, MidiSession *) {
-	mpd->setMidiPortListEnabled(false);
-	mpd->setMidiPortNameEditorEnabled(false);
-	mpd->setMidiPortName(QString().setNum(snd_seq_client_id(snd_seq)));
-	mpd->exec();
-	return false;
+bool ALSAMidiDriver::canDeletePort(MidiSession *midiSession) {
+	return rawMidiPortDriver.canDeletePort(midiSession);
+}
+
+bool ALSAMidiDriver::canSetPortProperties(MidiSession *midiSession) {
+	return rawMidiPortDriver.canSetPortProperties(midiSession);
+}
+
+bool ALSAMidiDriver::createPort(MidiPropertiesDialog *mpd, MidiSession *midiSession) {
+	return rawMidiPortDriver.createPort(mpd, midiSession);
+}
+
+void ALSAMidiDriver::deletePort(MidiSession *midiSession) {
+	rawMidiPortDriver.deletePort(midiSession);
+}
+
+bool ALSAMidiDriver::setPortProperties(MidiPropertiesDialog *mpd, MidiSession *midiSession) {
+	return rawMidiPortDriver.setPortProperties(mpd, midiSession);
+}
+
+QString ALSAMidiDriver::getNewPortName(MidiPropertiesDialog *mpd) {
+	return rawMidiPortDriver.getNewPortName(mpd);
 }

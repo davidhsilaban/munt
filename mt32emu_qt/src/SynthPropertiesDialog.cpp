@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@ SynthPropertiesDialog::SynthPropertiesDialog(QWidget *parent, SynthRoute *useSyn
 	rsd(synthProfile, this)
 {
 	ui->setupUi(this);
-	refreshProfileCombo();
+	refreshProfileCombo("");
 	loadSynthProfile();
 
 	connect(ui->buttonBox, SIGNAL(clicked(QAbstractButton *)), SLOT(on_buttonBox_clicked(QAbstractButton *)));
@@ -41,13 +41,21 @@ SynthPropertiesDialog::SynthPropertiesDialog(QWidget *parent, SynthRoute *useSyn
 	synthRoute->connectReportHandler(SIGNAL(reverbLevelChanged(int)), this, SLOT(handleReverbLevelChanged(int)));
 }
 
-SynthPropertiesDialog::~SynthPropertiesDialog()
-{
+SynthPropertiesDialog::~SynthPropertiesDialog() {
 	delete ui;
+}
+
+void SynthPropertiesDialog::showEvent(QShowEvent *) {
+	loadSynthProfile();
 }
 
 void SynthPropertiesDialog::on_changeROMSetButton_clicked() {
 	rsd.exec();
+	ui->romSetLabel->setText(getROMSetDescription());
+}
+
+void SynthPropertiesDialog::on_midiDelayEmuComboBox_currentIndexChanged(int index) {
+	synthRoute->setMIDIDelayMode((MT32Emu::MIDIDelayMode)index);
 }
 
 void SynthPropertiesDialog::on_dacEmuComboBox_currentIndexChanged(int index) {
@@ -62,6 +70,22 @@ void SynthPropertiesDialog::on_dacEmuComboBox_currentIndexChanged(int index) {
 		synthRoute->setDACInputMode(MT32Emu::DACInputMode_GENERATION2);
 		break;
 	}
+}
+
+void SynthPropertiesDialog::on_maxPartialsSpinBox_valueChanged(int value) {
+	synthRoute->setPartialCount(value);
+}
+
+void SynthPropertiesDialog::on_analogComboBox_currentIndexChanged(int index) {
+	synthRoute->setAnalogOutputMode(MT32Emu::AnalogOutputMode(2 - index));
+}
+
+void SynthPropertiesDialog::on_rendererTypeComboBox_currentIndexChanged(int index) {
+	synthRoute->setRendererType(MT32Emu::RendererType(index));
+}
+
+void SynthPropertiesDialog::on_reverbCompatibilityComboBox_currentIndexChanged(int index) {
+	synthRoute->setReverbCompatibilityMode((ReverbCompatibilityMode)index);
 }
 
 void SynthPropertiesDialog::on_buttonBox_clicked(QAbstractButton *button) {
@@ -86,11 +110,10 @@ void SynthPropertiesDialog::on_buttonBox_clicked(QAbstractButton *button) {
 void SynthPropertiesDialog::on_profileComboBox_currentIndexChanged(int) {
 	Master &master = *Master::getInstance();
 	QString name = ui->profileComboBox->currentText();
-	synthRoute->getSynthProfile(synthProfile);
 	master.loadSynthProfile(synthProfile, name);
 	synthRoute->setSynthProfile(synthProfile, name);
 	ui->profileCheckBox->setChecked(name == master.getDefaultSynthProfileName());
-	loadSynthProfile();
+	loadSynthProfile(false);
 }
 
 void SynthPropertiesDialog::on_reverbCheckBox_stateChanged(int state) {
@@ -126,6 +149,25 @@ void SynthPropertiesDialog::on_outputGainSlider_valueChanged(int value) {
 void SynthPropertiesDialog::on_reverbOutputGainSlider_valueChanged(int value) {
 	synthRoute->setReverbOutputGain((float)value / 100.0f);
 }
+void SynthPropertiesDialog::on_reverseStereoCheckBox_stateChanged(int state) {
+	synthRoute->setReversedStereoEnabled(state == Qt::Checked);
+}
+
+void SynthPropertiesDialog::on_assignChannels2_10Button_clicked() {
+	synthRoute->resetMIDIChannelsAssignment(false);
+}
+
+void SynthPropertiesDialog::on_assignChannels1_8_10Button_clicked() {
+	synthRoute->resetMIDIChannelsAssignment(true);
+}
+
+void SynthPropertiesDialog::on_niceAmpRampCheckBox_stateChanged(int state) {
+	synthRoute->setNiceAmpRampEnabled(state == Qt::Checked);
+}
+
+void SynthPropertiesDialog::on_engageChannel1CheckBox_stateChanged(int state) {
+	synthRoute->setInitialMIDIChannelsAssignment(state == Qt::Checked);
+}
 
 void SynthPropertiesDialog::updateReverbSettings() {
 	if (ui->reverbCheckBox->checkState() == Qt::PartiallyChecked) return;
@@ -151,45 +193,64 @@ void SynthPropertiesDialog::resetSynth() {
 	int reverbTime = ui->reverbTimeSlider->value();
 	int reverbLevel = ui->reverbLevelSlider->value();
 	synthRoute->reset();
+	on_midiDelayEmuComboBox_currentIndexChanged(ui->midiDelayEmuComboBox->currentIndex());
 	on_dacEmuComboBox_currentIndexChanged(ui->dacEmuComboBox->currentIndex());
+	on_reverbCompatibilityComboBox_currentIndexChanged(ui->reverbCompatibilityComboBox->currentIndex());
 	Qt::CheckState reverbState = ui->reverbCheckBox->checkState();
-	on_reverbCheckBox_stateChanged(reverbState);
 	if (reverbState != Qt::PartiallyChecked) {
 		ui->reverbModeComboBox->setCurrentIndex(reverbMode);
 		ui->reverbTimeSlider->setValue(reverbTime);
 		ui->reverbLevelSlider->setValue(reverbLevel);
 	}
+	on_reverbCheckBox_stateChanged(reverbState);
 	on_outputGainSlider_valueChanged(ui->outputGainSlider->value());
 	on_reverbOutputGainSlider_valueChanged(ui->reverbOutputGainSlider->value());
+	on_reverseStereoCheckBox_stateChanged(ui->reverseStereoCheckBox->checkState());
 }
 
 void SynthPropertiesDialog::restoreDefaults() {
+	ui->midiDelayEmuComboBox->setCurrentIndex(1);
 	ui->dacEmuComboBox->setCurrentIndex(0);
+	ui->maxPartialsSpinBox->setValue(MT32Emu::DEFAULT_MAX_PARTIALS);
+	ui->analogComboBox->setCurrentIndex(0);
+	ui->rendererTypeComboBox->setCurrentIndex(0);
 	ui->reverbCheckBox->setCheckState(Qt::Checked);
+	ui->reverbCompatibilityComboBox->setCurrentIndex(0);
 	ui->reverbModeComboBox->setCurrentIndex(0);
 	ui->reverbTimeSlider->setValue(5);
 	ui->reverbLevelSlider->setValue(3);
 	ui->reverbCheckBox->setCheckState(Qt::PartiallyChecked);
 	ui->outputGainSlider->setValue(100);
 	ui->reverbOutputGainSlider->setValue(100);
+	ui->reverseStereoCheckBox->setCheckState(Qt::Unchecked);
+	ui->niceAmpRampCheckBox->setCheckState(Qt::Checked);
+	ui->engageChannel1CheckBox->setCheckState(Qt::Unchecked);
 }
 
-void SynthPropertiesDialog::loadSynthProfile() {
-	synthRoute->getSynthProfile(synthProfile);
+void SynthPropertiesDialog::loadSynthProfile(bool reloadFromSynthRoute) {
+	if (reloadFromSynthRoute) synthRoute->getSynthProfile(synthProfile);
 	ui->romSetLabel->setText(getROMSetDescription());
 	rsd.loadROMInfos();
+	ui->midiDelayEmuComboBox->setCurrentIndex(synthProfile.midiDelayMode);
 	ui->dacEmuComboBox->setCurrentIndex(synthProfile.emuDACInputMode == MT32Emu::DACInputMode_NICE ? MT32Emu::DACInputMode_NICE : synthProfile.emuDACInputMode - 1);
+	ui->maxPartialsSpinBox->setValue(synthProfile.partialCount);
+	ui->analogComboBox->setCurrentIndex(2 - synthProfile.analogOutputMode);
+	ui->rendererTypeComboBox->setCurrentIndex(synthProfile.rendererType);
+	ui->reverbCompatibilityComboBox->setCurrentIndex(synthProfile.reverbCompatibilityMode);
 	ui->reverbCheckBox->setCheckState(Qt::Checked);
 	ui->reverbModeComboBox->setCurrentIndex(synthProfile.reverbMode);
 	ui->reverbTimeSlider->setValue(synthProfile.reverbTime);
 	ui->reverbLevelSlider->setValue(synthProfile.reverbLevel);
-	if (synthProfile.reverbEnabled) {
-		ui->reverbCheckBox->setCheckState(synthProfile.reverbOverridden ? Qt::Checked : Qt::PartiallyChecked);
+	if (synthProfile.reverbOverridden) {
+		ui->reverbCheckBox->setCheckState(synthProfile.reverbEnabled ? Qt::Checked : Qt::Unchecked);
 	} else {
-		ui->reverbCheckBox->setCheckState(Qt::Unchecked);
+		ui->reverbCheckBox->setCheckState(Qt::PartiallyChecked);
 	}
 	ui->outputGainSlider->setValue(synthProfile.outputGain * 100);
 	ui->reverbOutputGainSlider->setValue(synthProfile.reverbOutputGain * 100);
+	ui->reverseStereoCheckBox->setCheckState(synthProfile.reversedStereoEnabled ? Qt::Checked : Qt::Unchecked);
+	ui->niceAmpRampCheckBox->setCheckState(synthProfile.niceAmpRamp ? Qt::Checked : Qt::Unchecked);
+	ui->engageChannel1CheckBox->setCheckState(synthProfile.engageChannel1OnOpen ? Qt::Checked : Qt::Unchecked);
 }
 
 void SynthPropertiesDialog::saveSynthProfile() {
@@ -201,24 +262,23 @@ void SynthPropertiesDialog::saveSynthProfile() {
 	Master &master = *Master::getInstance();
 	QString name = ui->profileComboBox->currentText();
 	master.storeSynthProfile(newSynthProfile, name);
-	synthProfile.controlROMImage = NULL;
-	synthProfile.pcmROMImage = NULL;
 	master.loadSynthProfile(synthProfile, name);
 	synthRoute->setSynthProfile(synthProfile, name);
 	if (ui->profileCheckBox->isChecked()) master.setDefaultSynthProfileName(name);
 	ui->romSetLabel->setText(getROMSetDescription());
-	refreshProfileCombo();
+	refreshProfileCombo(name);
 }
 
-void SynthPropertiesDialog::refreshProfileCombo() {
+void SynthPropertiesDialog::refreshProfileCombo(QString name) {
 	QStringList profiles = Master::getInstance()->enumSynthProfiles();
 	ui->profileComboBox->blockSignals(true);
 	ui->profileComboBox->clear();
 	ui->profileComboBox->addItems(profiles);
+	if (name.isEmpty()) name = Master::getInstance()->getDefaultSynthProfileName();
 	for (int i = 0; i < profiles.count(); i++) {
-		if (profiles[i] == Master::getInstance()->getDefaultSynthProfileName()) {
+		if (profiles[i] == name) {
 			ui->profileComboBox->setCurrentIndex(i);
-			ui->profileCheckBox->setChecked(true);
+			ui->profileCheckBox->setChecked(profiles[i] == Master::getInstance()->getDefaultSynthProfileName());
 			break;
 		}
 	}
@@ -226,5 +286,14 @@ void SynthPropertiesDialog::refreshProfileCombo() {
 }
 
 QString SynthPropertiesDialog::getROMSetDescription() {
-	return (synthProfile.controlROMImage == NULL) ? "Unknown" : synthProfile.controlROMImage->getROMInfo()->description;
+	MT32Emu::FileStream file;
+	if (file.open(Master::getROMPathName(synthProfile.romDir, synthProfile.controlROMFileName).toLocal8Bit())) {
+		const MT32Emu::ROMInfo *romInfo = MT32Emu::ROMInfo::getROMInfo(&file);
+		if (romInfo != NULL) {
+			QString des = romInfo->description;
+			MT32Emu::ROMInfo::freeROMInfo(romInfo);
+			return des;
+		}
+	}
+	return "Unknown";
 }

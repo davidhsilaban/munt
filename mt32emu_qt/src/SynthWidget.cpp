@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -13,6 +13,8 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+#include <QFileDialog>
 
 #include "audiodrv/AudioDriver.h"
 #include "SynthWidget.h"
@@ -72,8 +74,8 @@ void SynthWidget::refreshAudioDeviceList(Master *master, const AudioDevice *useA
 	QListIterator<const AudioDevice *> audioDeviceIt(master->getAudioDevices());
 	while(audioDeviceIt.hasNext()) {
 		const AudioDevice *audioDevice = audioDeviceIt.next();
-		ui->audioDeviceComboBox->addItem(audioDevice->driver->name + ": " + audioDevice->name, qVariantFromValue(audioDevice));
-		if (useAudioDevice != NULL && useAudioDevice->driver->id == audioDevice->driver->id
+		ui->audioDeviceComboBox->addItem(audioDevice->driver.name + ": " + audioDevice->name, QVariant::fromValue(audioDevice));
+		if (useAudioDevice != NULL && useAudioDevice->driver.id == audioDevice->driver.id
 				&& useAudioDevice->name == audioDevice->name) ui->audioDeviceComboBox->setCurrentIndex(audioDeviceIndex);
 		audioDeviceIndex++;
 	}
@@ -82,7 +84,7 @@ void SynthWidget::refreshAudioDeviceList(Master *master, const AudioDevice *useA
 }
 
 void SynthWidget::on_refreshButton_clicked() {
-	const AudioDevice *currentDevice = qVariantValue<const AudioDevice *> (ui->audioDeviceComboBox->itemData(ui->audioDeviceComboBox->currentIndex()));
+	const AudioDevice *currentDevice = ui->audioDeviceComboBox->itemData(ui->audioDeviceComboBox->currentIndex()).value<const AudioDevice *>();
 	refreshAudioDeviceList(Master::getInstance(), currentDevice);
 }
 
@@ -90,7 +92,7 @@ void SynthWidget::on_audioDeviceComboBox_currentIndexChanged(int audioDeviceInde
 	const AudioDevice *currentAudioDevice = ui->audioDeviceComboBox->itemData(audioDeviceIndex).value<const AudioDevice *>();
 	if (currentAudioDevice != NULL) {
 		synthRoute->setAudioDevice(currentAudioDevice);
-		Master::getInstance()->setDefaultAudioDevice(currentAudioDevice->driver->id, currentAudioDevice->name);
+		Master::getInstance()->setDefaultAudioDevice(currentAudioDevice->driver.id, currentAudioDevice->name);
 	}
 }
 
@@ -99,25 +101,33 @@ void SynthWidget::handleSynthRouteState(SynthRouteState SynthRouteState) {
 	case SynthRouteState_OPEN:
 		ui->startButton->setEnabled(false);
 		ui->stopButton->setEnabled(true);
-		ui->audioOutputGroupBox->setEnabled(false);
+		ui->audioDeviceComboBox->setEnabled(false);
+		ui->refreshButton->setEnabled(false);
+		ui->audioPropertiesButton->setEnabled(false);
 		ui->statusLabel->setText("Open");
 		break;
 	case SynthRouteState_OPENING:
 		ui->startButton->setEnabled(false);
 		ui->stopButton->setEnabled(false);
-		ui->audioOutputGroupBox->setEnabled(false);
+		ui->audioDeviceComboBox->setEnabled(false);
+		ui->refreshButton->setEnabled(false);
+		ui->audioPropertiesButton->setEnabled(false);
 		ui->statusLabel->setText("Opening");
 		break;
 	case SynthRouteState_CLOSING:
 		ui->startButton->setEnabled(false);
 		ui->stopButton->setEnabled(false);
-		ui->audioOutputGroupBox->setEnabled(false);
+		ui->audioDeviceComboBox->setEnabled(false);
+		ui->refreshButton->setEnabled(false);
+		ui->audioPropertiesButton->setEnabled(false);
 		ui->statusLabel->setText("Closing");
 		break;
 	case SynthRouteState_CLOSED:
 		ui->startButton->setEnabled(true);
 		ui->stopButton->setEnabled(false);
-		ui->audioOutputGroupBox->setEnabled(true);
+		ui->audioDeviceComboBox->setEnabled(true);
+		ui->refreshButton->setEnabled(true);
+		ui->audioPropertiesButton->setEnabled(true);
 		ui->statusLabel->setText("Closed");
 		break;
 	}
@@ -127,13 +137,13 @@ void SynthWidget::handleSynthRouteState(SynthRouteState SynthRouteState) {
 void SynthWidget::on_audioPropertiesButton_clicked()
 {
 	const AudioDevice *device = ui->audioDeviceComboBox->itemData(ui->audioDeviceComboBox->currentIndex()).value<const AudioDevice *>();
-	const AudioDriverSettings &driverSettings = device->driver->getAudioSettings();
-	apd.setCheckText((device->driver->id == "waveout") ? "Use ring buffer renderer" : "Use advanced timing");
+	const AudioDriverSettings &driverSettings = device->driver.getAudioSettings();
+	apd.setCheckText((device->driver.id == "waveout") ? "Use ring buffer renderer" : "Use advanced timing");
 	apd.setData(driverSettings);
 	if (QDialog::Accepted == apd.exec()) {
 		AudioDriverSettings newDriverSettings;
 		apd.getData(newDriverSettings);
-		device->driver->setAudioSettings(newDriverSettings);
+		device->driver.setAudioSettings(newDriverSettings);
 	}
 }
 
@@ -224,7 +234,7 @@ void SynthWidget::on_midiRecord_clicked() {
 		ui->midiRecord->setText("Record");
 		recorder.stopRecording();
 		static QString currentDir = NULL;
-		QString fileName = QFileDialog::getSaveFileName(NULL, NULL, currentDir, "Standard MIDI files (*.mid)");
+		QString fileName = QFileDialog::getSaveFileName(this, NULL, currentDir, "Standard MIDI files (*.mid)");
 		if (!fileName.isEmpty()) {
 			currentDir = QDir(fileName).absolutePath();
 			recorder.saveSMF(fileName, MasterClock::NANOS_PER_MILLISECOND);
@@ -232,6 +242,21 @@ void SynthWidget::on_midiRecord_clicked() {
 	} else {
 		ui->midiRecord->setText("Stop");
 		recorder.startRecording();
+	}
+}
+
+void SynthWidget::on_audioRecord_clicked() {
+	if (synthRoute->isRecordingAudio()) {
+		ui->audioRecord->setText("Record");
+		synthRoute->stopRecordingAudio();
+	} else {
+		static QString currentDir = NULL;
+		QString fileName = QFileDialog::getSaveFileName(this, NULL, currentDir, "*.wav *.raw;;*.wav;;*.raw;;*.*");
+		if (!fileName.isEmpty()) {
+			currentDir = QDir(fileName).absolutePath();
+			ui->audioRecord->setText("Stop");
+			synthRoute->startRecordingAudio(fileName);
+		}
 	}
 }
 
@@ -248,7 +273,9 @@ void SynthWidget::hideEvent(QHideEvent *) {
 }
 
 void SynthWidget::showEvent(QShowEvent *) {
-	synthStateMonitor->enableMonitor(true);
+	if (synthRoute->getState() == SynthRouteState_OPEN) {
+		synthStateMonitor->enableMonitor(true);
+	}
 }
 
 void SynthWidget::on_detailsButton_clicked() {
@@ -280,11 +307,11 @@ void SynthWidget::on_detailsButton_clicked() {
 
 void SynthWidget::setEmuModeText() {
 	QString emuMode;
-	SynthProfile synthProfile;
-	synthRoute->getSynthProfile(synthProfile);
-	if (synthProfile.controlROMImage == NULL) emuMode = "Unknown";
-	else emuMode = synthProfile.controlROMImage->getROMInfo()->description;
-	ui->synthEmuModeLabel->setText(emuMode + " Emulation Mode");
+	const MT32Emu::ROMImage *controlROMImage = NULL;
+	const MT32Emu::ROMImage *pcmROMImage = NULL;
+	synthRoute->getROMImages(controlROMImage, pcmROMImage);
+	emuMode = controlROMImage == NULL ? "Unknown" : controlROMImage->getROMInfo()->description;
+	ui->synthEmuModeLabel->setText("Emulation Mode: " + emuMode);
 }
 
 const QIcon &SynthWidget::getSynthDetailsIcon(bool visible) {

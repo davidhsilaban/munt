@@ -1,4 +1,4 @@
-/* Copyright (C) 2011, 2012, 2013 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 
 #include <QSystemTrayIcon>
 #include <QDropEvent>
+#include <QMessageBox>
 
 #include "Master.h"
 #include "MasterClock.h"
@@ -23,6 +24,9 @@
 
 #ifdef WITH_WINMM_AUDIO_DRIVER
 #include "audiodrv/WinMMAudioDriver.h"
+#endif
+#ifdef WITH_COREAUDIO_DRIVER
+#include "audiodrv/CoreAudioDriver.h"
 #endif
 #ifdef WITH_ALSA_AUDIO_DRIVER
 #include "audiodrv/AlsaAudioDriver.h"
@@ -52,12 +56,45 @@
 #include "mididrv/OSSMidiPortDriver.h"
 #endif
 
-void Master::init() {
-	stopping = false;
+static const int ACTUAL_SETTINGS_VERSION = 2;
+
+static Master *instance = NULL;
+
+static void migrateSettings(QSettings &settings, const int fromVersion) {
+	qDebug() << "Migrating settings from version" << fromVersion << "to version" << ACTUAL_SETTINGS_VERSION;
+	switch (fromVersion) {
+	case 1:
+		AudioDriver::migrateAudioSettingsFromVersion1();
+		settings.setValue("Master/settingsVersion", ACTUAL_SETTINGS_VERSION);
+		break;
+	default:
+		qDebug() << "Migration failed";
+		QMessageBox::warning(NULL, "Unsupported settings version",
+			"Unable to load application settings of unsupported version " + QString().setNum(fromVersion) + ".\n"
+			"Please, check the settings!");
+		break;
+	}
+}
+
+Master::Master() {
+	if (instance != NULL) {
+		qFatal("Master already instantiated!");
+		// Do nothing if ignored
+		return;
+	}
+	instance = this;
+	maxSessions = 0;
 
 	moveToThread(QCoreApplication::instance()->thread());
 
+	MasterClock::init();
+
 	settings = new QSettings("muntemu.org", "Munt mt32emu-qt");
+	int settingsVersion = settings->value("Master/settingsVersion", 1).toInt();
+	if (settingsVersion != ACTUAL_SETTINGS_VERSION) {
+		migrateSettings(*settings, settingsVersion);
+	}
+
 	synthProfileName = settings->value("Master/defaultSynthProfile", "default").toString();
 
 	trayIcon = NULL;
@@ -69,6 +106,7 @@ void Master::init() {
 	lastAudioDeviceScan = -4 * MasterClock::NANOS_PER_SECOND;
 	getAudioDevices();
 	pinnedSynthRoute = NULL;
+	audioFileWriterSynth = NULL;
 
 	qRegisterMetaType<MidiDriver *>("MidiDriver*");
 	qRegisterMetaType<MidiSession *>("MidiSession*");
@@ -76,21 +114,8 @@ void Master::init() {
 	qRegisterMetaType<SynthState>("SynthState");
 }
 
-void Master::aboutToQuit() {
-	qDebug() << "Got Master::aboutToQuit()";
-	stopping = true;
-	return;
-}
-
 Master::~Master() {
-	if (!stopping) {
-		// Emergency exit
-		fprintf(stderr, "Master is going down but haven't got Master::aboutToQuit(), exiting immediately!\n");
-		if (trayIcon != NULL) {
-			trayIcon->hide();
-		}
-		exit(1);
-	}
+	qDebug() << "Shutting down Master...";
 
 	delete settings;
 
@@ -101,27 +126,32 @@ Master::~Master() {
 	}
 
 	QMutableListIterator<SynthRoute *> synthRouteIt(synthRoutes);
-	while(synthRouteIt.hasNext()) {
+	while (synthRouteIt.hasNext()) {
 		delete synthRouteIt.next();
 		synthRouteIt.remove();
 	}
 
 	QMutableListIterator<const AudioDevice *> audioDeviceIt(audioDevices);
-	while(audioDeviceIt.hasNext()) {
+	while (audioDeviceIt.hasNext()) {
 		delete audioDeviceIt.next();
 		audioDeviceIt.remove();
 	}
 
 	QMutableListIterator<AudioDriver *> audioDriverIt(audioDrivers);
-	while(audioDriverIt.hasNext()) {
+	while (audioDriverIt.hasNext()) {
 		delete audioDriverIt.next();
 		audioDriverIt.remove();
 	}
+
+	MasterClock::cleanup();
 }
 
 void Master::initAudioDrivers() {
 #ifdef WITH_WINMM_AUDIO_DRIVER
 	audioDrivers.append(new WinMMAudioDriver(this));
+#endif
+#ifdef WITH_COREAUDIO_DRIVER
+	audioDrivers.append(new CoreAudioDriver(this));
 #endif
 #ifdef WITH_ALSA_AUDIO_DRIVER
 	audioDrivers.append(new AlsaAudioDriver(this));
@@ -160,26 +190,81 @@ void Master::startMidiProcessing() {
 }
 
 Master *Master::getInstance() {
-	static Master master;
+	return instance;
+}
 
-	// This fixes a deadlock caused by static initialization algorithm of GCC
-	// Instead, MSVC invokes constructors for static vars only once
-	static bool initialized = false;
-	if (!initialized) {
-		initialized = true;
-		master.init();
-	}
-	return &master;
+void Master::showCommandLineHelp() {
+	QString appName = QFileInfo(QCoreApplication::arguments().at(0)).fileName();
+	QMessageBox::information(NULL, "Information",
+		"Command line format:\n"
+		"	" + appName + " [option...] [<command> file...]\n"
+		"\n"
+		"Options:\n"
+		"-profile <profile name>\n"
+		"	override default synth profile with specified profile\n"
+		"	during this run only.\n"
+		"-max_sessions <number of sessions>\n"
+		"	exit after this number of MIDI sessions are finished.\n"
+		"\n"
+		"Commands:\n"
+		"play <SMF file...>\n"
+		"	enqueue specified standard MIDI files into the internal\n"
+		"	MIDI player for playback and start playing.\n"
+		"convert <output file> <SMF file...>\n"
+		"	convert specified standard MIDI files to a WAV/RAW wave\n"
+		"	output file and exit.\n"
+	);
 }
 
 void Master::processCommandLine(QStringList args) {
-	if (args.count() < 3) return;
-	QString command = args.at(1);
-	QStringList files = args.mid(2);
+	int argIx = 1;
+	QString command = args.at(argIx++);
+	while (command.startsWith('-')) {
+		if (QString::compare(command, "-profile", Qt::CaseInsensitive) == 0) {
+			if (args.count() > argIx) {
+				QString profile = args.at(argIx++);
+				if (enumSynthProfiles().contains(profile, Qt::CaseInsensitive)) {
+					synthProfileName = profile;
+				} else {
+					QMessageBox::warning(NULL, "Error", "The profile name specified in command line is invalid.\nOption \"-profile\" ignored.");
+				}
+			} else {
+				QMessageBox::warning(NULL, "Error", "The profile name must be specified in command line with \"-profile\" option.");
+				showCommandLineHelp();
+			}
+		} else if (QString::compare(command, "-max_sessions", Qt::CaseInsensitive) == 0) {
+			if (args.count() > argIx) {
+				maxSessions = args.at(argIx++).toUInt();
+				if (maxSessions == 0) QMessageBox::warning(NULL, "Error", "The maximum number of sessions specified in command line is invalid.\nOption \"-max_sessions\" ignored.");
+			} else {
+				QMessageBox::warning(NULL, "Error", "The maximum number of sessions must be specified in command line with \"-max_sessions\" option.");
+				showCommandLineHelp();
+			}
+		} else {
+			QMessageBox::warning(NULL, "Error", "Illegal command line option " + command + " specified.");
+			showCommandLineHelp();
+		}
+		if (args.count() == argIx) return;
+		command = args.at(argIx++);
+	}
+	if (args.count() == argIx) {
+		QMessageBox::warning(NULL, "Error", "The file list must be specified in command line with a command.");
+		showCommandLineHelp();
+		return;
+	}
+	QStringList files = args.mid(argIx);
 	if (QString::compare(command, "play", Qt::CaseInsensitive) == 0) {
 		emit playMidiFiles(files);
 	} else if (QString::compare(command, "convert", Qt::CaseInsensitive) == 0) {
-		if (args.count() > 3) emit convertMidiFiles(files);
+		if (args.count() > (argIx + 1)) {
+			emit convertMidiFiles(files);
+		} else {
+			QMessageBox::warning(NULL, "Error", "The file list must be specified in command line with " + command + " command.");
+			showCommandLineHelp();
+		}
+	} else {
+		QMessageBox::warning(NULL, "Error", "Illegal command " + command + " specified in command line.");
+		showCommandLineHelp();
 	}
 }
 
@@ -209,7 +294,7 @@ const AudioDevice *Master::findAudioDevice(QString driverId, QString name) const
 	QListIterator<const AudioDevice *> audioDeviceIt(audioDevices);
 	while(audioDeviceIt.hasNext()) {
 		const AudioDevice *audioDevice = audioDeviceIt.next();
-		if (driverId == audioDevice->driver->id && name == audioDevice->name) {
+		if (driverId == audioDevice->driver.id && name == audioDevice->name) {
 			return audioDevice;
 		}
 	}
@@ -241,59 +326,47 @@ const QStringList Master::enumSynthProfiles() const {
 	return profiles;
 }
 
-const QString Master::getROMPathName(const QDir &romDir, QString romFileName) const {
+const QString Master::getROMPathName(const QDir &romDir, QString romFileName) {
 	QString pathName = QDir::toNativeSeparators(romDir.absolutePath());
 	return pathName + QDir::separator() + romFileName;
 }
 
-void Master::makeROMImages(SynthProfile &synthProfile) {
-	freeROMImages(synthProfile.controlROMImage, synthProfile.pcmROMImage);
-
-	// FIXME: Probably there need to be a proper ROMImage cache with allocation counters
+void Master::findROMImages(const SynthProfile &synthProfile, const MT32Emu::ROMImage *&controlROMImage, const MT32Emu::ROMImage *&pcmROMImage) const {
+	if (controlROMImage != NULL && pcmROMImage != NULL) return;
+	const MT32Emu::ROMImage *synthControlROMImage = NULL;
+	const MT32Emu::ROMImage *synthPCMROMImage = NULL;
+	if (audioFileWriterSynth != NULL) {
+		audioFileWriterSynth->getROMImages(controlROMImage, pcmROMImage);
+		if (controlROMImage == NULL) controlROMImage = synthControlROMImage;
+		if (pcmROMImage == NULL) controlROMImage = synthPCMROMImage;
+	}
 	foreach (SynthRoute *synthRoute, synthRoutes) {
+		if (controlROMImage != NULL && pcmROMImage != NULL) return;
 		SynthProfile profile;
 		synthRoute->getSynthProfile(profile);
 		if (synthProfile.romDir != profile.romDir) continue;
-		if (synthProfile.controlROMFileName == profile.controlROMFileName) synthProfile.controlROMImage = profile.controlROMImage;
-		if (synthProfile.pcmROMFileName == profile.pcmROMFileName) synthProfile.pcmROMImage = profile.pcmROMImage;
-	}
-
-	MT32Emu::FileStream *file;
-	if (synthProfile.controlROMImage == NULL) {
-		file = new MT32Emu::FileStream();
-		if (file->open(getROMPathName(synthProfile.romDir, synthProfile.controlROMFileName).toUtf8())) {
-			synthProfile.controlROMImage = MT32Emu::ROMImage::makeROMImage(file);
-			if (synthProfile.controlROMImage->getROMInfo() == NULL) {
-				freeROMImages(synthProfile.controlROMImage, synthProfile.pcmROMImage);
-				return;
-			}
-		}
-	}
-	if (synthProfile.pcmROMImage == NULL) {
-		file = new MT32Emu::FileStream();
-		if (file->open(getROMPathName(synthProfile.romDir, synthProfile.pcmROMFileName).toUtf8())) {
-			synthProfile.pcmROMImage = MT32Emu::ROMImage::makeROMImage(file);
-			if (synthProfile.pcmROMImage->getROMInfo() == NULL) {
-				freeROMImages(synthProfile.controlROMImage, synthProfile.pcmROMImage);
-			}
-		}
+		synthRoute->getROMImages(synthControlROMImage, synthPCMROMImage);
+		if (controlROMImage == NULL && synthProfile.controlROMFileName == profile.controlROMFileName) controlROMImage = synthControlROMImage;
+		if (pcmROMImage == NULL && synthProfile.pcmROMFileName == profile.pcmROMFileName) pcmROMImage = synthPCMROMImage;
 	}
 }
 
-void Master::freeROMImages(const MT32Emu::ROMImage* &controlROMImage, const MT32Emu::ROMImage* &pcmROMImage) {
+void Master::freeROMImages(const MT32Emu::ROMImage *&controlROMImage, const MT32Emu::ROMImage *&pcmROMImage) const {
 	if (controlROMImage == NULL && pcmROMImage == NULL) return;
 	bool controlROMInUse = false;
 	bool pcmROMInUse = false;
-	SynthProfile synthProfile;
+	const MT32Emu::ROMImage *synthControlROMImage = NULL;
+	const MT32Emu::ROMImage *synthPCMROMImage = NULL;
 	if (audioFileWriterSynth != NULL) {
-		audioFileWriterSynth->getSynthProfile(synthProfile);
-		controlROMInUse = controlROMInUse || (synthProfile.controlROMImage == controlROMImage);
-		pcmROMInUse = pcmROMInUse || (synthProfile.pcmROMImage == pcmROMImage);
+		audioFileWriterSynth->getROMImages(synthControlROMImage, synthPCMROMImage);
+		controlROMInUse = controlROMInUse || (synthControlROMImage == controlROMImage);
+		pcmROMInUse = pcmROMInUse || (synthPCMROMImage == pcmROMImage);
 	}
 	foreach (SynthRoute *synthRoute, synthRoutes) {
-		synthRoute->getSynthProfile(synthProfile);
-		controlROMInUse = controlROMInUse || (synthProfile.controlROMImage == controlROMImage);
-		pcmROMInUse = pcmROMInUse || (synthProfile.pcmROMImage == pcmROMImage);
+		if (controlROMInUse && pcmROMInUse) break;
+		synthRoute->getROMImages(synthControlROMImage, synthPCMROMImage);
+		controlROMInUse = controlROMInUse || (synthControlROMImage == controlROMImage);
+		pcmROMInUse = pcmROMInUse || (synthPCMROMImage == pcmROMImage);
 	}
 	if (!controlROMInUse && controlROMImage != NULL) {
 		delete controlROMImage->getFile();
@@ -307,7 +380,17 @@ void Master::freeROMImages(const MT32Emu::ROMImage* &controlROMImage, const MT32
 	}
 }
 
+bool Master::handleROMSLoadFailed(QString usedSynthProfileName) {
+	if (usedSynthProfileName.isEmpty() || usedSynthProfileName == synthProfileName) {
+		bool recoveryAttempted = false;
+		emit romsLoadFailed(recoveryAttempted);
+		return recoveryAttempted;
+	}
+	return false;
+}
+
 QString Master::getDefaultROMSearchPath() {
+#if QT_VERSION >= QT_VERSION_CHECK(4, 6, 0)
 	QString defaultPath;
 	QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 	if (env.contains("USERPROFILE")) {
@@ -318,35 +401,40 @@ QString Master::getDefaultROMSearchPath() {
 		defaultPath = ".";
 	}
 	return defaultPath + "/roms/";
+#else
+	return "./roms/";
+#endif
 }
 
 void Master::loadSynthProfile(SynthProfile &synthProfile, QString name) {
-	static bool romNotSetReported = false;
 	if (name.isEmpty()) name = synthProfileName;
 	settings->beginGroup("Profiles/" + name);
-
 	QString romPath = settings->value("romDir", "").toString();
 	synthProfile.romDir.setPath(romPath.isEmpty() ? getDefaultROMSearchPath(): romPath);
 	synthProfile.controlROMFileName = settings->value("controlROM", "MT32_CONTROL.ROM").toString();
 	synthProfile.pcmROMFileName = settings->value("pcmROM", "MT32_PCM.ROM").toString();
-	synthProfile.emuDACInputMode = (MT32Emu::DACInputMode)settings->value("emuDACInputMode", 0).toInt();
+	synthProfile.emuDACInputMode = (MT32Emu::DACInputMode)settings->value("emuDACInputMode", MT32Emu::DACInputMode_NICE).toInt();
+	synthProfile.midiDelayMode = (MT32Emu::MIDIDelayMode)settings->value("midiDelayMode", MT32Emu::MIDIDelayMode_DELAY_SHORT_MESSAGES_ONLY).toInt();
+	synthProfile.analogOutputMode = (MT32Emu::AnalogOutputMode)settings->value("analogOutputMode", MT32Emu::AnalogOutputMode_ACCURATE).toInt();
+	synthProfile.rendererType = (MT32Emu::RendererType)settings->value("rendererType", MT32Emu::RendererType_BIT16S).toInt();
+	synthProfile.partialCount = settings->value("partialCount", MT32Emu::DEFAULT_MAX_PARTIALS).toInt();
+	synthProfile.reverbCompatibilityMode = (ReverbCompatibilityMode)settings->value("reverbCompatibilityMode", ReverbCompatibilityMode_DEFAULT).toInt();
 	synthProfile.reverbEnabled = settings->value("reverbEnabled", true).toBool();
 	synthProfile.reverbOverridden = settings->value("reverbOverridden", false).toBool();
 	synthProfile.reverbMode = settings->value("reverbMode", 0).toInt();
 	synthProfile.reverbTime = settings->value("reverbTime", 5).toInt();
 	synthProfile.reverbLevel = settings->value("reverbLevel", 3).toInt();
-	synthProfile.outputGain = settings->value("outputGain", 1.0f).toFloat();
-	synthProfile.reverbOutputGain = settings->value("reverbOutputGain", 1.0f).toFloat();
+#if QT_VERSION >= QT_VERSION_CHECK(4, 6, 0)
+	synthProfile.outputGain = settings->value("outputGain", 1.0).toFloat();
+	synthProfile.reverbOutputGain = settings->value("reverbOutputGain", 1.0).toFloat();
+#else
+	synthProfile.outputGain = (float)settings->value("outputGain", 1.0).toDouble();
+	synthProfile.reverbOutputGain = (float)settings->value("reverbOutputGain", 1.0).toDouble();
+#endif
+	synthProfile.reversedStereoEnabled = settings->value("reversedStereoEnabled", false).toBool();
+	synthProfile.engageChannel1OnOpen = settings->value("engageChannel1OnOpen", false).toBool();
+	synthProfile.niceAmpRamp = settings->value("niceAmpRamp", true).toBool();
 	settings->endGroup();
-
-	makeROMImages(synthProfile);
-	if (romNotSetReported || name != synthProfileName) return;
-	if (synthProfile.controlROMImage == NULL || synthProfile.pcmROMImage == NULL) {
-		romNotSetReported = true;
-		emit romsNotSet();
-		loadSynthProfile(synthProfile, name);
-		romNotSetReported = false;
-	}
 }
 
 void Master::storeSynthProfile(const SynthProfile &synthProfile, QString name) const {
@@ -356,6 +444,11 @@ void Master::storeSynthProfile(const SynthProfile &synthProfile, QString name) c
 	settings->setValue("controlROM", synthProfile.controlROMFileName);
 	settings->setValue("pcmROM", synthProfile.pcmROMFileName);
 	settings->setValue("emuDACInputMode", synthProfile.emuDACInputMode);
+	settings->setValue("midiDelayMode", synthProfile.midiDelayMode);
+	settings->setValue("analogOutputMode", synthProfile.analogOutputMode);
+	settings->setValue("rendererType", synthProfile.rendererType);
+	settings->setValue("partialCount", synthProfile.partialCount);
+	settings->setValue("reverbCompatibilityMode", synthProfile.reverbCompatibilityMode);
 	settings->setValue("reverbEnabled", synthProfile.reverbEnabled);
 	settings->setValue("reverbOverridden", synthProfile.reverbOverridden);
 	settings->setValue("reverbMode", synthProfile.reverbMode);
@@ -363,6 +456,9 @@ void Master::storeSynthProfile(const SynthProfile &synthProfile, QString name) c
 	settings->setValue("reverbLevel", synthProfile.reverbLevel);
 	settings->setValue("outputGain", QString().setNum(synthProfile.outputGain));
 	settings->setValue("reverbOutputGain", QString().setNum(synthProfile.reverbOutputGain));
+	settings->setValue("reversedStereoEnabled", synthProfile.reversedStereoEnabled);
+	settings->setValue("engageChannel1OnOpen", synthProfile.engageChannel1OnOpen);
+	settings->setValue("niceAmpRamp", synthProfile.niceAmpRamp);
 	settings->endGroup();
 }
 
@@ -372,13 +468,13 @@ bool Master::isPinned(const SynthRoute *synthRoute) const {
 
 void Master::setPinned(SynthRoute *synthRoute) {
 	if (pinnedSynthRoute == synthRoute) return;
-	settings->setValue("Master/startPinnedSynthRoute", QString().setNum(synthRoute != NULL));
+	settings->setValue("Master/startPinnedSynthRoute", synthRoute != NULL);
 	pinnedSynthRoute = synthRoute;
 	emit synthRoutePinned();
 }
 
 void Master::startPinnedSynthRoute() {
-	if (settings->value("Master/startPinnedSynthRoute", "0").toBool())
+	if (settings->value("Master/startPinnedSynthRoute", false).toBool())
 		setPinned(startSynthRoute());
 }
 
@@ -413,6 +509,12 @@ void Master::showBalloon(const QString &title, const QString &text) {
 	}
 }
 
+void Master::updateMainWindowTitleContribution(const QString &titleContribution) {
+	QString title("Munt: MT-32 Emulator");
+	if (!titleContribution.isEmpty()) title += " - " + titleContribution;
+	emit mainWindowTitleUpdated(title);
+}
+
 void Master::createMidiSession(MidiSession **returnVal, MidiDriver *midiDriver, QString name) {
 	SynthRoute *synthRoute = startSynthRoute();
 	MidiSession *midiSession = new MidiSession(this, midiDriver, name, synthRoute);
@@ -421,6 +523,10 @@ void Master::createMidiSession(MidiSession **returnVal, MidiDriver *midiDriver, 
 }
 
 void Master::deleteMidiSession(MidiSession *midiSession) {
+	if ((maxSessions > 0) && (--maxSessions == 0)) {
+		qDebug() << "Exitting due to maximum number of sessions finished";
+		maxSessionsFinished();
+	}
 	SynthRoute *synthRoute = midiSession->getSynthRoute();
 	synthRoute->removeMidiSession(midiSession);
 	delete midiSession;
@@ -483,4 +589,46 @@ void Master::isSupportedDropEvent(QDropEvent *e) {
 		e->setDropAction(Qt::CopyAction);
 	}
 	e->accept();
+}
+
+QStringList Master::parseMidiListFromUrls(const QList<QUrl> urls) {
+	QStringList fileNames;
+	for (int i = 0; i < urls.size(); i++) {
+		QUrl url = urls.at(i);
+		if (url.scheme() == "file") {
+			fileNames += parseMidiListFromPathName(url.toLocalFile());
+		}
+	}
+	return fileNames;
+}
+
+QStringList Master::parseMidiListFromPathName(const QString pathName) {
+	QStringList fileNames;
+	QDir dir = QDir(pathName);
+	if (dir.exists()) {
+		if (!dir.isReadable()) return fileNames;
+		QStringList syxFileNames = dir.entryList(QStringList() << "*.syx");
+		QStringList midiFileNames = dir.entryList(QStringList() << "*.mid" << "*.smf");
+		foreach(QString midiFileName, syxFileNames + midiFileNames) {
+			fileNames += dir.absoluteFilePath(midiFileName);
+		}
+		return fileNames;
+	}
+	if (pathName.endsWith(".pls", Qt::CaseInsensitive)) {
+		QFile listFile(pathName);
+		if (!listFile.open(QIODevice::ReadOnly)) {
+			qDebug() << "Couldn't open file" << pathName + ", ignored";
+			return fileNames;
+		}
+		QTextStream listStream(&listFile);
+		while (!listStream.atEnd()) {
+			QString s = listStream.readLine();
+			if (!s.isEmpty()) {
+				fileNames += s;
+			}
+		}
+	} else {
+		fileNames += pathName;
+	}
+	return fileNames;
 }

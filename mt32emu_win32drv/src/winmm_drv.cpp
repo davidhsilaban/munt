@@ -1,5 +1,5 @@
 /* Copyright (C) 2003, 2004, 2005 Dean Beeler, Jerome Fisher
- * Copyright (C) 2011, 2012 Dean Beeler, Jerome Fisher, Sergey V. Mikayev
+ * Copyright (C) 2011-2019 Dean Beeler, Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -19,6 +19,8 @@
 
 #define MAX_DRIVERS 8
 #define MAX_CLIENTS 8 // Per driver
+
+namespace {
 
 static bool hrTimerAvailable;
 static double mult;
@@ -47,7 +49,9 @@ void updateNanoCounter() {
 	}
 }
 
-static MT32Emu::MidiSynth &midiSynth = MT32Emu::MidiSynth::getInstance();
+using namespace MT32Emu;
+
+static MidiSynth &midiSynth = MidiSynth::getInstance();
 static bool synthOpened = false;
 static HWND hwnd = NULL;
 static int driverCount;
@@ -62,6 +66,7 @@ struct Driver {
 		DWORD flags;
 		DWORD_PTR callback;
 		DWORD synth_instance;
+		MidiStreamParser *midiStreamParser;
 	} clients[MAX_CLIENTS];
 } drivers[MAX_DRIVERS];
 
@@ -121,70 +126,23 @@ STDAPI_(LONG) DriverProc(DWORD dwDriverID, HDRVR hdrvr, WORD wMessage, DWORD dwP
 
 
 HRESULT modGetCaps(PVOID capsPtr, DWORD capsSize) {
-	MIDIOUTCAPSA * myCapsA;
-	MIDIOUTCAPSW * myCapsW;
-	MIDIOUTCAPS2A * myCaps2A;
-	MIDIOUTCAPS2W * myCaps2W;
+	static const TCHAR synthName[] = L"MT-32 Synth Emulator";
+	static MIDIOUTCAPS myCaps = {0};
 
-	CHAR synthName[] = "MT-32 Synth Emulator\0";
-	WCHAR synthNameW[] = L"MT-32 Synth Emulator\0";
-
-	switch (capsSize) {
-	case (sizeof(MIDIOUTCAPSA)):
-		myCapsA = (MIDIOUTCAPSA *)capsPtr;
-		myCapsA->wMid = MM_UNMAPPED;
-		myCapsA->wPid = MM_MPU401_MIDIOUT;
-		memcpy(myCapsA->szPname, synthName, sizeof(synthName));
-		myCapsA->wTechnology = MOD_MIDIPORT;
-		myCapsA->vDriverVersion = 0x0090;
-		myCapsA->wVoices = 0;
-		myCapsA->wNotes = 0;
-		myCapsA->wChannelMask = 0xffff;
-		myCapsA->dwSupport = 0;
-		return MMSYSERR_NOERROR;
-
-	case (sizeof(MIDIOUTCAPSW)):
-		myCapsW = (MIDIOUTCAPSW *)capsPtr;
-		myCapsW->wMid = MM_UNMAPPED;
-		myCapsW->wPid = MM_MPU401_MIDIOUT;
-		memcpy(myCapsW->szPname, synthNameW, sizeof(synthNameW));
-		myCapsW->wTechnology = MOD_MIDIPORT;
-		myCapsW->vDriverVersion = 0x0090;
-		myCapsW->wVoices = 0;
-		myCapsW->wNotes = 0;
-		myCapsW->wChannelMask = 0xffff;
-		myCapsW->dwSupport = 0;
-		return MMSYSERR_NOERROR;
-
-	case (sizeof(MIDIOUTCAPS2A)):
-		myCaps2A = (MIDIOUTCAPS2A *)capsPtr;
-		myCaps2A->wMid = MM_UNMAPPED;
-		myCaps2A->wPid = MM_MPU401_MIDIOUT;
-		memcpy(myCaps2A->szPname, synthName, sizeof(synthName));
-		myCaps2A->wTechnology = MOD_MIDIPORT;
-		myCaps2A->vDriverVersion = 0x0090;
-		myCaps2A->wVoices = 0;
-		myCaps2A->wNotes = 0;
-		myCaps2A->wChannelMask = 0xffff;
-		myCaps2A->dwSupport = 0;
-		return MMSYSERR_NOERROR;
-
-	case (sizeof(MIDIOUTCAPS2W)):
-		myCaps2W = (MIDIOUTCAPS2W *)capsPtr;
-		myCaps2W->wMid = MM_UNMAPPED;
-		myCaps2W->wPid = MM_MPU401_MIDIOUT;
-		memcpy(myCaps2W->szPname, synthNameW, sizeof(synthNameW));
-		myCaps2W->wTechnology = MOD_MIDIPORT;
-		myCaps2W->vDriverVersion = 0x0090;
-		myCaps2W->wVoices = 0;
-		myCaps2W->wNotes = 0;
-		myCaps2W->wChannelMask = 0xffff;
-		myCaps2W->dwSupport = 0;
-		return MMSYSERR_NOERROR;
-
-	default:
-		return MMSYSERR_ERROR;
+	if (!myCaps.wMid) {
+		myCaps.wMid = MM_UNMAPPED;
+		myCaps.wPid = MM_MPU401_MIDIOUT;
+		myCaps.vDriverVersion = 0x0090;
+		memcpy(&myCaps.szPname, synthName, sizeof(synthName));
+		myCaps.wTechnology = MOD_MIDIPORT;
+		myCaps.wVoices = 0;
+		myCaps.wNotes = 0;
+		myCaps.wChannelMask = 0xffff;
+		myCaps.dwSupport = 0;
 	}
+
+	memcpy(capsPtr, &myCaps, min(sizeof(myCaps), capsSize));
+	return MMSYSERR_NOERROR;
 }
 
 void DoCallback(int driverNum, DWORD_PTR clientNum, DWORD msg, DWORD_PTR param1, DWORD_PTR param2) {
@@ -192,16 +150,16 @@ void DoCallback(int driverNum, DWORD_PTR clientNum, DWORD msg, DWORD_PTR param1,
 	DriverCallback(client->callback, client->flags, drivers[driverNum].hdrvr, msg, client->instance, param1, param2);
 }
 
-LONG OpenDriver(Driver *driver, UINT uDeviceID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
+LONG OpenDriver(Driver &driver, UINT uDeviceID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
 	int clientNum;
-	if (driver->clientCount == 0) {
+	if (driver.clientCount == 0) {
 		clientNum = 0;
-	} else if (driver->clientCount == MAX_CLIENTS) {
+	} else if (driver.clientCount == MAX_CLIENTS) {
 		return MMSYSERR_ALLOCATED;
 	} else {
 		int i;
 		for (i = 0; i < MAX_CLIENTS; i++) {
-			if (!driver->clients[i].allocated) {
+			if (!driver.clients[i].allocated) {
 				break;
 			}
 		}
@@ -211,128 +169,171 @@ LONG OpenDriver(Driver *driver, UINT uDeviceID, UINT uMsg, DWORD_PTR dwUser, DWO
 		clientNum = i;
 	}
 	MIDIOPENDESC *desc = (MIDIOPENDESC *)dwParam1;
-	driver->clients[clientNum].allocated = true;
-	driver->clients[clientNum].flags = HIWORD(dwParam2);
-	driver->clients[clientNum].callback = desc->dwCallback;
-	driver->clients[clientNum].instance = desc->dwInstance;
+	driver.clients[clientNum].allocated = true;
+	driver.clients[clientNum].flags = HIWORD(dwParam2);
+	driver.clients[clientNum].callback = desc->dwCallback;
+	driver.clients[clientNum].instance = desc->dwInstance;
 	*(LONG *)dwUser = clientNum;
-	driver->clientCount++;
+	driver.clientCount++;
 	DoCallback(uDeviceID, clientNum, MOM_OPEN, NULL, NULL);
 	return MMSYSERR_NOERROR;
 }
 
-LONG CloseDriver(Driver *driver, UINT uDeviceID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
-	if (!driver->clients[dwUser].allocated) {
-		return MMSYSERR_INVALPARAM;
-	}
-	driver->clients[dwUser].allocated = false;
-	driver->clientCount--;
+LONG CloseDriver(Driver &driver, UINT uDeviceID, UINT uMsg, DWORD_PTR dwUser, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
+	driver.clients[dwUser].allocated = false;
+	driver.clientCount--;
 	DoCallback(uDeviceID, dwUser, MOM_CLOSE, NULL, NULL);
 	return MMSYSERR_NOERROR;
 }
 
-STDAPI_(DWORD) modMessage(DWORD uDeviceID, DWORD uMsg, DWORD_PTR dwUser, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
-	MIDIHDR *midiHdr;
-	Driver *driver = &drivers[uDeviceID];
-	DWORD instance;
-	switch (uMsg) {
-	case MODM_OPEN:
+class MidiStreamParserImpl : public MidiStreamParser {
+public:
+	MidiStreamParserImpl(Driver::Client &useClient) : client(useClient) {}
+
+protected:
+	virtual void handleShortMessage(const Bit32u message) {
 		if (hwnd == NULL) {
-			hwnd = FindWindow(L"mt32emu_class", NULL);
-		}
-		if (hwnd == NULL) {
-			//  Synth application not found
-			if (!synthOpened) {
-				if (midiSynth.Init() != 0) return MMSYSERR_ERROR;
-				synthOpened = true;
-			}
-			instance = NULL;
+			midiSynth.PlayMIDI(message);
 		} else {
-			if (synthOpened) {
-				midiSynth.Close();
-				synthOpened = false;
-			}
 			updateNanoCounter();
-			DWORD msg[260] = {0, -1, 1, nanoCounter.LowPart, nanoCounter.HighPart}; // 0, handshake indicator, version, timestamp, .exe filename of calling application
-			GetModuleFileNameA(GetModuleHandle(NULL), (char *)&msg[5], 255);
-			COPYDATASTRUCT cds = {0, sizeof(msg), msg};
-			instance = (DWORD)SendMessage(hwnd, WM_COPYDATA, NULL, (LPARAM)&cds);
+			DWORD msg[] = { 0, 0, nanoCounter.LowPart, (DWORD)nanoCounter.HighPart, message }; // 0, short MIDI message indicator, timestamp, data
+			COPYDATASTRUCT cds = { client.synth_instance, sizeof(msg), msg };
+			LRESULT res = SendMessage(hwnd, WM_COPYDATA, NULL, (LPARAM)&cds);
+			if (res != 1) {
+				// Synth app was terminated. Fall back to integrated synth
+				hwnd = NULL;
+				if (midiSynth.Init() == 0) {
+					synthOpened = true;
+					midiSynth.PlayMIDI(message);
+				}
+			}
 		}
-		DWORD res;
-		res = OpenDriver(driver, uDeviceID, uMsg, dwUser, dwParam1, dwParam2);
-		driver->clients[*(LONG *)dwUser].synth_instance = instance;
+	}
+
+	virtual void handleSysex(const Bit8u stream[], const Bit32u length) {
+		if (hwnd == NULL) {
+			midiSynth.PlaySysex(stream, length);
+		} else {
+			COPYDATASTRUCT cds = { client.synth_instance, length, (PVOID)stream };
+			LRESULT res = SendMessage(hwnd, WM_COPYDATA, NULL, (LPARAM)&cds);
+			if (res != 1) {
+				// Synth app was terminated. Fall back to integrated synth
+				hwnd = NULL;
+				if (midiSynth.Init() == 0) {
+					synthOpened = true;
+					midiSynth.PlaySysex(stream, length);
+				}
+			}
+		}
+	}
+
+	virtual void handleSystemRealtimeMessage(const Bit8u realtime) {
+		// Unsupported by now
+	}
+
+	virtual void printDebug(const char *debugMessage) {
+#ifdef ENABLE_DEBUG_OUTPUT
+		std::cout << debugMessage << std::endl;
+#endif
+	}
+
+private:
+	Driver::Client &client;
+};
+
+STDAPI_(DWORD) modMessage(DWORD uDeviceID, DWORD uMsg, DWORD_PTR dwUser, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
+	Driver &driver = drivers[uDeviceID];
+	switch (uMsg) {
+	case MODM_OPEN: {
+		DWORD instance;
+		for (int i = 0; i < 3; i++) {
+			if (i == 2) {
+				// Synth application failed to create a MIDI session, giving up
+				hwnd = NULL;
+			} else if (hwnd == NULL) {
+				hwnd = FindWindow(L"mt32emu_class", NULL);
+			}
+			if (hwnd == NULL) {
+				// Synth application not found or failing
+				if (!synthOpened) {
+					if (midiSynth.Init() != 0) return MMSYSERR_NOTENABLED;
+					synthOpened = true;
+				}
+				instance = 0;
+			} else {
+				if (synthOpened) {
+					midiSynth.Close();
+					synthOpened = false;
+				}
+				updateNanoCounter();
+				DWORD msg[70] = { 0, (DWORD)-1, 1, nanoCounter.LowPart, (DWORD)nanoCounter.HighPart }; // 0, handshake indicator, version, timestamp, .exe filename of calling application
+				GetModuleFileNameA(GetModuleHandle(NULL), (char *)&msg[5], 255);
+				COPYDATASTRUCT cds = { 0, sizeof(msg), msg };
+				instance = (DWORD)SendMessage(hwnd, WM_COPYDATA, NULL, (LPARAM)&cds);
+				if (!instance) {
+					// OK, we might be keeping old handle, try to refresh it first
+					hwnd = NULL;
+					continue;
+				}
+			}
+			break;
+		}
+		DWORD res = OpenDriver(driver, uDeviceID, uMsg, dwUser, dwParam1, dwParam2);
+		Driver::Client &client = driver.clients[*(LONG *)dwUser];
+		client.synth_instance = instance;
+		client.midiStreamParser = new MidiStreamParserImpl(client);
 		return res;
+	}
 
 	case MODM_CLOSE:
-		if (driver->clients[dwUser].allocated == false) {
-			return MMSYSERR_ERROR;
+		if (driver.clients[dwUser].allocated == false) {
+			return MMSYSERR_NOTENABLED;
 		}
 		if (hwnd == NULL) {
 			if (synthOpened) midiSynth.Reset();
 		} else {
-			SendMessage(hwnd, WM_APP, driver->clients[dwUser].synth_instance, NULL); // end of session message
+			SendMessage(hwnd, WM_APP, driver.clients[dwUser].synth_instance, NULL); // end of session message
 		}
+		delete driver.clients[dwUser].midiStreamParser;
 		return CloseDriver(driver, uDeviceID, uMsg, dwUser, dwParam1, dwParam2);
-
-	case MODM_PREPARE:
-		return MMSYSERR_NOTSUPPORTED;
-
-	case MODM_UNPREPARE:
-		return MMSYSERR_NOTSUPPORTED;
-
-	case MODM_GETDEVCAPS:
-		return modGetCaps((PVOID)dwParam1, (DWORD)dwParam2);
-
-	case MODM_DATA:
-		if (driver->clients[dwUser].allocated == false) {
-			return MMSYSERR_ERROR;
-		}
-		if (hwnd == NULL) {
-			midiSynth.PushMIDI((DWORD)dwParam1);
-		} else {
-			updateNanoCounter();
-			DWORD msg[] = {0, 0, nanoCounter.LowPart, nanoCounter.HighPart, (DWORD)dwParam1}; // 0, short MIDI message indicator, timestamp, data
-			COPYDATASTRUCT cds = {driver->clients[dwUser].synth_instance, sizeof(msg), msg};
-			LRESULT res = SendMessage(hwnd, WM_COPYDATA, NULL, (LPARAM)&cds);
-			if (res != 1) {
-				// Synth app was terminated. Fall back to integrated synth
-				hwnd = NULL;
-				if (midiSynth.Init() != 0) return MMSYSERR_ERROR;
-				synthOpened = true;
-			}
-		}
-		return MMSYSERR_NOERROR;
-
-	case MODM_LONGDATA:
-		if (driver->clients[dwUser].allocated == false) {
-			return MMSYSERR_ERROR;
-		}
-		midiHdr = (MIDIHDR *)dwParam1;
-		if ((midiHdr->dwFlags & MHDR_PREPARED) == 0) {
-			return MIDIERR_UNPREPARED;
-		}
-		if (hwnd == NULL) {
-			midiSynth.PlaySysex((MT32Emu::Bit8u*)midiHdr->lpData, midiHdr->dwBufferLength);
-		} else {
-			COPYDATASTRUCT cds = {driver->clients[dwUser].synth_instance, midiHdr->dwBufferLength, midiHdr->lpData};
-			LRESULT res = SendMessage(hwnd, WM_COPYDATA, NULL, (LPARAM)&cds);
-			if (res != 1) {
-				// Synth app was terminated. Fall back to integrated synth
-				hwnd = NULL;
-				if (midiSynth.Init() != 0) return MMSYSERR_ERROR;
-				synthOpened = true;
-			}
-		}
-		midiHdr->dwFlags |= MHDR_DONE;
-		midiHdr->dwFlags &= ~MHDR_INQUEUE;
-		DoCallback(uDeviceID, dwUser, MOM_DONE, dwParam1, NULL);
- 		return MMSYSERR_NOERROR;
 
 	case MODM_GETNUMDEVS:
 		return 0x1;
 
-	default:
+	case MODM_GETDEVCAPS:
+		return modGetCaps((PVOID)dwParam1, (DWORD)dwParam2);
+
+	case MODM_DATA: {
+		if (driver.clients[dwUser].allocated == false) {
+			return MMSYSERR_NOTENABLED;
+		}
+		driver.clients[dwUser].midiStreamParser->processShortMessage((Bit32u)dwParam1);
+		if ((hwnd == NULL) && (synthOpened == false))
+			return MMSYSERR_NOTENABLED;
 		return MMSYSERR_NOERROR;
+	}
+
+	case MODM_LONGDATA: {
+		if (driver.clients[dwUser].allocated == false) {
+			return MMSYSERR_NOTENABLED;
+		}
+		MIDIHDR *midiHdr = (MIDIHDR *)dwParam1;
+		if ((midiHdr->dwFlags & MHDR_PREPARED) == 0) {
+			return MIDIERR_UNPREPARED;
+		}
+		driver.clients[dwUser].midiStreamParser->parseStream((const Bit8u *)midiHdr->lpData, midiHdr->dwBufferLength);
+		if ((hwnd == NULL) && (synthOpened == false))
+			return MMSYSERR_NOTENABLED;
+		midiHdr->dwFlags |= MHDR_DONE;
+		midiHdr->dwFlags &= ~MHDR_INQUEUE;
+		DoCallback(uDeviceID, dwUser, MOM_DONE, dwParam1, NULL);
+ 		return MMSYSERR_NOERROR;
+	}
+
+	default:
 		break;
 	}
+	return MMSYSERR_NOTSUPPORTED;
 }
+
+} // namespace

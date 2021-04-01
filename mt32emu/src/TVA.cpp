@@ -33,6 +33,7 @@ namespace MT32Emu {
 
 // CONFIRMED: Matches a table in ROM - haven't got around to coming up with a formula for it yet.
 static Bit8u biasLevelToAmpSubtractionCoeff[13] = {255, 187, 137, 100, 74, 54, 40, 29, 21, 15, 10, 5, 0};
+//static Bit8u biasLevelToAmpSubtractionCoeff[13] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0};
 
 TVA::TVA(const Partial *usePartial, LA32Ramp *useAmpRamp) :
 	partial(usePartial), ampRamp(useAmpRamp), system(&usePartial->getSynth()->mt32ram.system), phase(TVA_PHASE_DEAD) {

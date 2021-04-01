@@ -500,6 +500,8 @@ bool Synth::loadControlROM(const ROMImage &controlROMImage) {
 	printDebug("Found Control ROM: %s, %s", controlROMInfo->shortName, controlROMInfo->description);
 #endif
 	const Bit8u *fileData = file->getData();
+	CONTROL_ROM_SIZE = file->getSize();
+	controlROMData = new Bit8u[CONTROL_ROM_SIZE];
 	memcpy(controlROMData, fileData, CONTROL_ROM_SIZE);
 
 	// Control ROM successfully loaded, now check whether it's a known type
@@ -887,6 +889,9 @@ void Synth::dispose() {
 	reverbModel = NULL;
 	controlROMFeatures = NULL;
 	controlROMMap = NULL;
+
+	delete[] controlROMData;
+	controlROMData = NULL;
 }
 
 void Synth::close() {

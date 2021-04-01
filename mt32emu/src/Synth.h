@@ -69,7 +69,7 @@ const Bit8u SYSEX_CMD_EOD = 0x45; // End of data
 const Bit8u SYSEX_CMD_ERR = 0x4E; // Communications error
 const Bit8u SYSEX_CMD_RJC = 0x4F; // Rejection
 
-const Bit32u CONTROL_ROM_SIZE = 64 * 1024;
+static Bit32u CONTROL_ROM_SIZE = 64 * 1024;
 
 // Set of multiplexed output streams appeared at the DAC entrance.
 template <class T>
@@ -146,7 +146,8 @@ private:
 
 	const ControlROMFeatureSet *controlROMFeatures;
 	const ControlROMMap *controlROMMap;
-	Bit8u controlROMData[CONTROL_ROM_SIZE];
+	//Bit8u controlROMData[CONTROL_ROM_SIZE];
+	Bit8u *controlROMData;
 	Bit16s *pcmROMData;
 	size_t pcmROMSize; // This is in 16-bit samples, therefore half the number of bytes in the ROM
 

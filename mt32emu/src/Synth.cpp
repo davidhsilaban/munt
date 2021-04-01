@@ -608,7 +608,8 @@ bool Synth::initCompressedTimbre(Bit16u timbreNum, const Bit8u *src, Bit32u srcL
 bool Synth::initTimbres(Bit16u mapAddress, Bit16u offset, Bit16u count, Bit16u startTimbre, bool compressed) {
 	const Bit8u *timbreMap = &controlROMData[mapAddress];
 	for (Bit16u i = 0; i < count * 2; i += 2) {
-		Bit16u address = (timbreMap[i + 1] << 8) | timbreMap[i];
+		Bit32u address = 0;
+		address = (timbreMap[i + 1] << 8) | timbreMap[i];
 		if (!compressed && (address + offset + sizeof(TimbreParam) > CONTROL_ROM_SIZE)) {
 			printDebug("Control ROM error: Timbre map entry 0x%04x for timbre %d points to invalid timbre address 0x%04x", i, startTimbre, address);
 			return false;

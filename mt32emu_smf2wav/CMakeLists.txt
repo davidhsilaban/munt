@@ -4,15 +4,11 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/../cmake
 
 project(mt32emu-smf2wav CXX)
 set(mt32emu_smf2wav_VERSION_MAJOR 1)
-set(mt32emu_smf2wav_VERSION_MINOR 5)
-set(mt32emu_smf2wav_VERSION_PATCH 2)
+set(mt32emu_smf2wav_VERSION_MINOR 6)
+set(mt32emu_smf2wav_VERSION_PATCH 0)
 set(mt32emu_smf2wav_VERSION "${mt32emu_smf2wav_VERSION_MAJOR}.${mt32emu_smf2wav_VERSION_MINOR}.${mt32emu_smf2wav_VERSION_PATCH}")
 
 add_definitions(-DVERSION="${mt32emu_smf2wav_VERSION}")
-
-if(libmt32emu_SHARED)
-  add_definitions(-DMT32EMU_SHARED)
-endif()
 
 find_package(GLIB2 REQUIRED)
 set(EXT_LIBS ${EXT_LIBS} ${GLIB2_LIBRARIES})
@@ -54,7 +50,7 @@ install(TARGETS
 )
 
 install(FILES
-  AUTHORS.txt COPYING.txt README.txt
+  AUTHORS.txt COPYING.txt README.md
   DESTINATION share/doc/munt/smf2wav
 )
 
@@ -68,14 +64,15 @@ set(CPACK_PACKAGE_CONTACT "sergm@muntemu.org")
 set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../FreeBSD/usr/ports/audio/mt32emu_smf2wav/pkg-descr")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Experimental program for converting SMF (Standard MIDI File) to WAVE via libmt32emu")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING.txt")
-set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.txt")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 set(CPACK_STRIP_FILES TRUE)
+# The default package file name has "-${CPACK_SYSTEM_NAME}" at the end, which doesn't match our previous releases
+set(CPACK_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}-${mt32emu_smf2wav_VERSION}")
+set(CPACK_SOURCE_PACKAGE_FILE_NAME "${CPACK_PACKAGE_FILE_NAME}")
 set(CPACK_SOURCE_GENERATOR TGZ)
 set(CPACK_SOURCE_STRIP_FILES TRUE)
-# The default source package file name has "-Source" at the end, which doesn't match our previous releases
-set(CPACK_SOURCE_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
 set(CPACK_RPM_PACKAGE_GROUP "Audio/Emulators")
-set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
+set(CPACK_RPM_PACKAGE_LICENSE "GPLv3+")
 set(CPACK_RPM_PACKAGE_URL "http://munt.sourceforge.net/")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS "ON")
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "http://munt.sourceforge.net/")

@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -52,7 +52,7 @@ MainWindow::MainWindow(Master *master, QWidget *parent) :
 	midiConverterDialog(NULL)
 {
 	ui->setupUi(this);
-	connect(master, SIGNAL(synthRouteAdded(SynthRoute *, const AudioDevice *)), SLOT(handleSynthRouteAdded(SynthRoute *, const AudioDevice *)));
+	connect(master, SIGNAL(synthRouteAdded(SynthRoute *, const AudioDevice *, bool)), SLOT(handleSynthRouteAdded(SynthRoute *, const AudioDevice *, bool)));
 	connect(master, SIGNAL(synthRouteRemoved(SynthRoute *)), SLOT(handleSynthRouteRemoved(SynthRoute *)));
 	connect(master, SIGNAL(synthRoutePinned()), SLOT(refreshTabNames()));
 	connect(master, SIGNAL(romsLoadFailed(bool &)), SLOT(handleROMSLoadFailed(bool &)), Qt::DirectConnection);
@@ -77,6 +77,11 @@ MainWindow::MainWindow(Master *master, QWidget *parent) :
 #ifdef WITH_WINCONSOLE
 	if (!master->getSettings()->value("Master/showConsole", false).toBool())
 		ShowWindow(GetConsoleWindow(), SW_HIDE);
+#endif
+
+#ifdef WITH_JACK_MIDI_DRIVER
+	ui->actionNew_JACK_MIDI_port->setVisible(true);
+	ui->actionNew_exclusive_JACK_MIDI_port->setVisible(true);
 #endif
 }
 
@@ -130,7 +135,7 @@ void MainWindow::on_actionAbout_triggered()
 		"Build Arch: " BUILD_SYSTEM " " + QString::number(QSysInfo::WordSize) + "-bit\n"
 		"Build Date: " BUILD_DATE "\n"
 		"\n"
-		"Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev\n"
+		"Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev\n"
 		"\n"
 		"Licensed under GPL v3 or any later version."
 	);
@@ -148,8 +153,8 @@ void MainWindow::refreshTabNames()
 	}
 }
 
-void MainWindow::handleSynthRouteAdded(SynthRoute *synthRoute, const AudioDevice *audioDevice) {
-	SynthWidget *synthWidget = new SynthWidget(master, synthRoute, audioDevice, this);
+void MainWindow::handleSynthRouteAdded(SynthRoute *synthRoute, const AudioDevice *audioDevice, bool pinnable) {
+	SynthWidget *synthWidget = new SynthWidget(master, synthRoute, pinnable, audioDevice, this);
 	int newTabIx = ui->synthTabs->count();
 	ui->synthTabs->addTab(synthWidget, QString("Synth &%1").arg(ui->synthTabs->count() + 1));
 	ui->synthTabs->setCurrentIndex(newTabIx);
@@ -329,3 +334,15 @@ void MainWindow::dropEvent(QDropEvent *e) {
 		midiPlayerDialog->dropEvent(e);
 	}
 }
+
+#ifdef WITH_JACK_MIDI_DRIVER
+void MainWindow::on_actionNew_JACK_MIDI_port_triggered() {
+	if (master->createJACKMidiPort(false)) return;
+	QMessageBox::warning(this, "Error", "Failed to create JACK MIDI port");
+}
+
+void MainWindow::on_actionNew_exclusive_JACK_MIDI_port_triggered() {
+	if (master->createJACKMidiPort(true)) return;
+	QMessageBox::warning(this, "Error", "Failed to create JACK MIDI port");
+}
+#endif

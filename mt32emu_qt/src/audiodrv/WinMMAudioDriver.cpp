@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -29,8 +29,8 @@ static const DWORD FRAME_SIZE = 4;
 // Latency for MIDI processing. 15 ms is the offset of interprocess timeGetTime() difference.
 static const DWORD DEFAULT_MIDI_LATENCY = 15;
 
-WinMMAudioStream::WinMMAudioStream(const AudioDriverSettings &useSettings, bool useRingBufferMode, QSynth &useSynth, const uint useSampleRate) :
-	AudioStream(useSettings, useSynth, useSampleRate),
+WinMMAudioStream::WinMMAudioStream(const AudioDriverSettings &useSettings, bool useRingBufferMode, SynthRoute &useSynthRoute, const uint useSampleRate) :
+	AudioStream(useSettings, useSynthRoute, useSampleRate),
 	hWaveOut(NULL), waveHdr(NULL), hEvent(NULL), hWaitableTimer(NULL), stopProcessing(false),
 	processor(*this), ringBufferMode(useRingBufferMode), prevPlayPosition(0L)
 {
@@ -102,13 +102,13 @@ void WinMMAudioProcessor::run() {
 		const DWORD playCursor = stream.getCurrentPlayPosition();
 		if (playCursor == (DWORD)-1) {
 			stream.stopProcessing = true;
-			stream.synth.close();
+			stream.synthRoute.audioStreamFailed();
 			return;
 		}
 
 		MasterClockNanos nanosNow = MasterClock::getClockNanos();
 		DWORD frameCount = 0;
-		DWORD renderPos = DWORD(stream.renderedFramesCount % stream.audioLatencyFrames);
+		DWORD renderPos = DWORD(stream.getRenderedFramesCount() % stream.audioLatencyFrames);
 		Bit16s *buf = NULL;
 		WAVEHDR *waveHdr = NULL;
 		if (stream.ringBufferMode) {
@@ -150,13 +150,11 @@ void WinMMAudioProcessor::run() {
 			}
 		}
 		DWORD framesInAudioBuffer = playCursor < renderPos ? renderPos - playCursor : (renderPos + stream.audioLatencyFrames) - playCursor;
-		stream.updateTimeInfo(nanosNow, framesInAudioBuffer);
-		stream.synth.render(buf, frameCount);
-		stream.renderedFramesCount += frameCount;
+		stream.renderAndUpdateState(buf, frameCount, nanosNow, framesInAudioBuffer);
 		if (!stream.ringBufferMode && waveOutWrite(stream.hWaveOut, waveHdr, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) {
 			qDebug() << "WinMMAudioDriver: waveOutWrite failed, thread stopped";
 			stream.stopProcessing = true;
-			stream.synth.close();
+			stream.synthRoute.audioStreamFailed();
 			return;
 		}
 	}
@@ -264,9 +262,9 @@ WinMMAudioDevice::WinMMAudioDevice(WinMMAudioDriver &driver, int useDeviceIndex,
 	AudioDevice(driver, useDeviceName), deviceIndex(useDeviceIndex) {
 }
 
-AudioStream *WinMMAudioDevice::startAudioStream(QSynth &synth, const uint sampleRate) const {
+AudioStream *WinMMAudioDevice::startAudioStream(SynthRoute &synthRoute, const uint sampleRate) const {
 	WinMMAudioDriver &winDriver = (WinMMAudioDriver &)driver;
-	WinMMAudioStream *stream = new WinMMAudioStream(winDriver.getAudioStreamSettings(), winDriver.isRingBufferMode(), synth, sampleRate);
+	WinMMAudioStream *stream = new WinMMAudioStream(winDriver.getAudioStreamSettings(), winDriver.isRingBufferMode(), synthRoute, sampleRate);
 	if (stream->start(deviceIndex)) {
 		return stream;
 	}

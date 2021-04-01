@@ -1,3 +1,36 @@
+HEAD:
+
+	* Added support for partial ROM images that may be dumped from several supported hardware
+	  models. Previously, those had to be either concatenated or interleaved for the emulation
+	  engine to accept. (#44)
+	* Added a few API extensions to better handle ROM images that can now be either full and /
+	  or partial, including iteration over several ROM files to find ones compatible with
+	  particular model of hardware units. (#47)
+	* Various improvements in build and packaging, in particular:
+	  * added generation of pkg-config file; (#43)
+	  * started symbol versioning for fine-grained documenting API changes yet to simplify
+	    looking up the minimum version of the library required by a caller application. (#46)
+	* Fixed undefined behaviour that the TVP emulation code may exhibit. (#51)
+
+2021-01-17:
+
+	2.4.2 released.
+
+	* Reworked the support for accessing ROM files with localised pathnames introduced in 2.3.0.
+	  Since it is not really necessary in majority of cases but may nevertheless update global
+	  C and C++ locale settings, it must now be explicitly enabled with the new Cmake option
+	  libmt32emu_INSTALL_DEFAULT_LOCALE. Also, it no longer touches the global C++ locale
+	  even if enabled, since that appears to have no positive effect. So far, it has been found
+	  useful for building shared library with some old versions of MS VC when linking C runtime
+	  statically.
+
+2020-10-07:
+
+	2.4.1 released.
+
+	* Fixed a bug that caused loss of the least significant bit of PCM samples
+	  loaded from ROMs.
+
 2020-03-29:
 
 	2.4.0 released.

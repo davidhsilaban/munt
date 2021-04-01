@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,7 +16,6 @@
 
 #include <QtGlobal>
 #include <unistd.h>
-#include <pthread.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <errno.h>

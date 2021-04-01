@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -51,10 +51,8 @@ public:
 		} else {
 			framesInAudioBuffer = 0;
 		}
-		stream.updateTimeInfo(nanosNow, framesInAudioBuffer);
 		uint framesToRender = uint(len >> 2);
-		stream.synth.render((Bit16s *)data, framesToRender);
-		stream.renderedFramesCount += framesToRender;
+		stream.renderAndUpdateState((Bit16s *)data, framesToRender, nanosNow, framesInAudioBuffer);
 		return len;
 	}
 
@@ -79,8 +77,8 @@ public:
 	}
 };
 
-QtAudioStream::QtAudioStream(const AudioDriverSettings &useSettings, QSynth &useSynth, const quint32 useSampleRate) :
-	AudioStream(useSettings, useSynth, useSampleRate)
+QtAudioStream::QtAudioStream(const AudioDriverSettings &useSettings, SynthRoute &useSynthRoute, const quint32 useSampleRate) :
+	AudioStream(useSettings, useSynthRoute, useSampleRate)
 {
 	// Creating QAudioOutput in a thread leads to smooth rendering
 	// Rendering will be performed in the main thread otherwise
@@ -128,8 +126,8 @@ void QtAudioStream::close() {
 
 QtAudioDefaultDevice::QtAudioDefaultDevice(QtAudioDriver &driver) : AudioDevice(driver, "Default") {}
 
-AudioStream *QtAudioDefaultDevice::startAudioStream(QSynth &synth, const uint sampleRate) const {
-	return new QtAudioStream(driver.getAudioSettings(), synth, sampleRate);
+AudioStream *QtAudioDefaultDevice::startAudioStream(SynthRoute &synthRoute, const uint sampleRate) const {
+	return new QtAudioStream(driver.getAudioSettings(), synthRoute, sampleRate);
 }
 
 QtAudioDriver::QtAudioDriver(Master *useMaster) : AudioDriver("qtaudio", "QtAudio") {

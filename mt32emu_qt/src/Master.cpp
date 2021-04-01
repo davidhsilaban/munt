@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -37,6 +37,9 @@
 #ifdef WITH_PULSE_AUDIO_DRIVER
 #include "audiodrv/PulseAudioDriver.h"
 #endif
+#ifdef WITH_JACK_AUDIO_DRIVER
+#include "audiodrv/JACKAudioDriver.h"
+#endif
 #ifdef WITH_PORT_AUDIO_DRIVER
 #include "audiodrv/PortAudioDriver.h"
 #endif
@@ -54,6 +57,10 @@
 #include "mididrv/CoreMidiDriver.h"
 #else
 #include "mididrv/OSSMidiPortDriver.h"
+#endif
+
+#ifdef WITH_JACK_MIDI_DRIVER
+#include "mididrv/JACKMidiDriver.h"
 #endif
 
 static const int ACTUAL_SETTINGS_VERSION = 2;
@@ -125,6 +132,12 @@ Master::~Master() {
 		midiDriver = NULL;
 	}
 
+#ifdef WITH_JACK_MIDI_DRIVER
+	jackMidiDriver->stop();
+	delete jackMidiDriver;
+	jackMidiDriver = NULL;
+#endif
+
 	QMutableListIterator<SynthRoute *> synthRouteIt(synthRoutes);
 	while (synthRouteIt.hasNext()) {
 		delete synthRouteIt.next();
@@ -162,6 +175,9 @@ void Master::initAudioDrivers() {
 #ifdef WITH_PULSE_AUDIO_DRIVER
 	audioDrivers.append(new PulseAudioDriver(this));
 #endif
+#ifdef WITH_JACK_AUDIO_DRIVER
+	audioDrivers.append(new JACKAudioDriver(this));
+#endif
 #ifdef WITH_PORT_AUDIO_DRIVER
 	audioDrivers.append(new PortAudioDriver(this));
 #endif
@@ -181,12 +197,20 @@ void Master::initMidiDrivers() {
 #else
 	midiDriver = new OSSMidiPortDriver(this);
 #endif
+
+#ifdef WITH_JACK_MIDI_DRIVER
+	jackMidiDriver = new JACKMidiDriver(this);
+#endif
 }
 
 void Master::startMidiProcessing() {
 	if (midiDriver != NULL) {
 		midiDriver->start();
 	}
+
+#ifdef WITH_JACK_MIDI_DRIVER
+	jackMidiDriver->start();
+#endif
 }
 
 Master *Master::getInstance() {
@@ -434,6 +458,8 @@ void Master::loadSynthProfile(SynthProfile &synthProfile, QString name) {
 	synthProfile.reversedStereoEnabled = settings->value("reversedStereoEnabled", false).toBool();
 	synthProfile.engageChannel1OnOpen = settings->value("engageChannel1OnOpen", false).toBool();
 	synthProfile.niceAmpRamp = settings->value("niceAmpRamp", true).toBool();
+	synthProfile.nicePanning = settings->value("nicePanning", false).toBool();
+	synthProfile.nicePartialMixing = settings->value("nicePartialMixing", false).toBool();
 	settings->endGroup();
 }
 
@@ -459,6 +485,8 @@ void Master::storeSynthProfile(const SynthProfile &synthProfile, QString name) c
 	settings->setValue("reversedStereoEnabled", synthProfile.reversedStereoEnabled);
 	settings->setValue("engageChannel1OnOpen", synthProfile.engageChannel1OnOpen);
 	settings->setValue("niceAmpRamp", synthProfile.niceAmpRamp);
+	settings->setValue("nicePanning", synthProfile.nicePanning);
+	settings->setValue("nicePartialMixing", synthProfile.nicePartialMixing);
 	settings->endGroup();
 }
 
@@ -474,8 +502,9 @@ void Master::setPinned(SynthRoute *synthRoute) {
 }
 
 void Master::startPinnedSynthRoute() {
-	if (settings->value("Master/startPinnedSynthRoute", false).toBool())
+	if (settings->value("Master/startPinnedSynthRoute", false).toBool()) {
 		setPinned(startSynthRoute());
+	}
 }
 
 SynthRoute *Master::startSynthRoute() {
@@ -489,7 +518,7 @@ SynthRoute *Master::startSynthRoute() {
 			synthRoute->setAudioDevice(audioDevice);
 			synthRoute->open();
 			synthRoutes.append(synthRoute);
-			emit synthRouteAdded(synthRoute, audioDevice);
+			emit synthRouteAdded(synthRoute, audioDevice, true);
 		}
 	}
 	return synthRoute;
@@ -525,7 +554,7 @@ void Master::createMidiSession(MidiSession **returnVal, MidiDriver *midiDriver, 
 void Master::deleteMidiSession(MidiSession *midiSession) {
 	if ((maxSessions > 0) && (--maxSessions == 0)) {
 		qDebug() << "Exitting due to maximum number of sessions finished";
-		maxSessionsFinished();
+		emit maxSessionsFinished();
 	}
 	SynthRoute *synthRoute = midiSession->getSynthRoute();
 	synthRoute->removeMidiSession(midiSession);
@@ -542,6 +571,9 @@ bool Master::canCreateMidiPort() {
 }
 
 bool Master::canDeleteMidiPort(MidiSession *midiSession) {
+#ifdef WITH_JACK_MIDI_DRIVER
+	if (jackMidiDriver->canDeletePort(midiSession)) return true;
+#endif
 	return midiDriver->canDeletePort(midiSession);
 }
 
@@ -562,6 +594,13 @@ void Master::createMidiPort(MidiPropertiesDialog *mpd, SynthRoute *synthRoute) {
 }
 
 void Master::deleteMidiPort(MidiSession *midiSession) {
+#ifdef WITH_JACK_MIDI_DRIVER
+	if (jackMidiDriver->canDeletePort(midiSession)) {
+		jackMidiDriver->deletePort(midiSession);
+		deleteMidiSession(midiSession);
+		return;
+	}
+#endif
 	midiDriver->deletePort(midiSession);
 	deleteMidiSession(midiSession);
 }
@@ -632,3 +671,35 @@ QStringList Master::parseMidiListFromPathName(const QString pathName) {
 	}
 	return fileNames;
 }
+
+#ifdef WITH_JACK_MIDI_DRIVER
+bool Master::createJACKMidiPort(bool exclusive) {
+	return static_cast<JACKMidiDriver *>(jackMidiDriver)->createJACKPort(exclusive);
+}
+
+void Master::deleteJACKMidiPort(MidiSession *midiSession) {
+	emit jackMidiPortDeleted(midiSession);
+}
+
+MidiSession *Master::createExclusiveJACKMidiPort(QString portName) {
+	getAudioDevices();
+	if (!audioDevices.isEmpty()) {
+		const AudioDevice *jackAudioDevice = findAudioDevice("jackaudio", "Default");
+		if (jackAudioDevice->driver.id == "jackaudio") {
+			SynthRoute *synthRoute = new SynthRoute(this);
+			synthRoute->setAudioDevice(jackAudioDevice);
+			synthRoutes.append(synthRoute);
+			emit synthRouteAdded(synthRoute, jackAudioDevice, false);
+			MidiSession *midiSession = new MidiSession(this, jackMidiDriver, portName, synthRoute);
+			synthRoute->enableExclusiveMidiMode(midiSession);
+			if (synthRoute->open(JACKAudioDefaultDevice::startAudioStream)) {
+				// This must be done asynchronously
+				connect(synthRoute, SIGNAL(exclusiveMidiSessionRemoved(MidiSession *)), jackMidiDriver, SLOT(onJACKMidiPortDeleted(MidiSession *)), Qt::QueuedConnection);
+				return midiSession;
+			}
+			deleteMidiSession(midiSession);
+		}
+	}
+	return NULL;
+}
+#endif

@@ -4,8 +4,8 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/../cmake
 
 project(mt32emu-qt)
 set(mt32emu_qt_VERSION_MAJOR 1)
-set(mt32emu_qt_VERSION_MINOR 7)
-set(mt32emu_qt_VERSION_PATCH 1)
+set(mt32emu_qt_VERSION_MINOR 8)
+set(mt32emu_qt_VERSION_PATCH 0)
 set(mt32emu_qt_VERSION "${mt32emu_qt_VERSION_MAJOR}.${mt32emu_qt_VERSION_MINOR}.${mt32emu_qt_VERSION_PATCH}")
 
 if(${CMAKE_SYSTEM_NAME} STREQUAL Linux)
@@ -27,10 +27,6 @@ endif()
 add_definitions(-DAPP_VERSION="${mt32emu_qt_VERSION}")
 add_definitions(-DBUILD_SYSTEM="${CMAKE_SYSTEM_NAME}")
 
-if(libmt32emu_SHARED)
-  add_definitions(-DMT32EMU_SHARED)
-endif()
-
 include(CheckIncludeFiles)
 include(CheckCXXSymbolExists)
 include(CheckLibraryExists)
@@ -46,6 +42,8 @@ set(mt32emu_qt_SOURCES
   src/MidiRecorder.cpp
   src/MidiSession.cpp
   src/QMidiEvent.cpp
+  src/QRingBuffer.cpp
+  src/QMidiBuffer.cpp
   src/QSynth.cpp
   src/SynthRoute.cpp
   src/SynthPropertiesDialog.cpp
@@ -96,11 +94,14 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
     src/mididrv/CoreMidiDriver.cpp
     src/audiodrv/CoreAudioDriver.cpp
   )
-  set(CMAKE_EXE_LINKER_FLAGS "-framework Foundation -framework AudioToolbox -framework CoreMIDI")
+  set(CMAKE_EXE_LINKER_FLAGS "-framework Foundation -framework AudioToolbox -framework CoreAudio -framework CoreMIDI")
   set(CMAKE_MACOSX_BUNDLE True)
 else()
   list(APPEND mt32emu_qt_SOURCES src/mididrv/OSSMidiPortDriver.cpp)
   set(EXT_LIBS ${EXT_LIBS} pthread)
+  if(OS2)
+    set(EXT_LIBS ${EXT_LIBS} cx)
+  endif()
   CHECK_CXX_SYMBOL_EXISTS(clock_nanosleep time.h CLOCK_NANOSLEEP_FOUND)
   if(CLOCK_NANOSLEEP_FOUND)
     add_definitions(-DWITH_POSIX_CLOCK_NANOSLEEP)
@@ -212,6 +213,18 @@ if(SYS_SOUNDCARD_FOUND)
   )
 endif()
 
+find_package(JACK)
+if(JACK_FOUND)
+  add_definitions(-DWITH_JACK_MIDI_DRIVER -DWITH_JACK_AUDIO_DRIVER)
+  set(EXT_LIBS ${EXT_LIBS} ${JACK_LIBRARIES})
+  include_directories(${JACK_INCLUDE_DIRS})
+  set(mt32emu_qt_SOURCES ${mt32emu_qt_SOURCES}
+    src/JACKClient.cpp
+    src/mididrv/JACKMidiDriver.cpp
+    src/audiodrv/JACKAudioDriver.cpp
+  )
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID STREQUAL Clang)
   add_compile_options(-Wall -Wextra -Wnon-virtual-dtor)
   if(mt32emu-qt_REQUIRED_CPP11)
@@ -234,7 +247,7 @@ endif()
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-if(${PROJECT_NAME}_PRECOMPILED_HEADER)
+if(${PROJECT_NAME}_PRECOMPILED_HEADER AND CMAKE_VERSION VERSION_LESS 3.16)
   set(${PROJECT_NAME}_PRECOMPILED_HEADER_SRC ${CMAKE_CURRENT_BINARY_DIR}/pch.cpp)
   file(APPEND ${${PROJECT_NAME}_PRECOMPILED_HEADER_SRC} "")
 
@@ -294,7 +307,7 @@ if(${PROJECT_NAME}_PRECOMPILED_HEADER)
         OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/pch.h.gch
     )
   endif(MSVC)
-endif(${PROJECT_NAME}_PRECOMPILED_HEADER)
+endif(${PROJECT_NAME}_PRECOMPILED_HEADER AND CMAKE_VERSION VERSION_LESS 3.16)
 
 add_executable(mt32emu-qt
   ${${PROJECT_NAME}_PRECOMPILED_HEADER_SRC}
@@ -303,13 +316,19 @@ add_executable(mt32emu-qt
   ${mt32emu_qt_RC}
 )
 
-if(${PROJECT_NAME}_PRECOMPILED_HEADER AND XCODE)
-  set_target_properties(${PROJECT_NAME}
-    PROPERTIES
-      XCODE_ATTRIBUTE_GCC_PRECOMPILE_PREFIX_HEADER "YES"
-      XCODE_ATTRIBUTE_GCC_PREFIX_HEADER "${${PROJECT_NAME}_PRECOMPILED_HEADER}"
-  )
-endif()
+if(${PROJECT_NAME}_PRECOMPILED_HEADER)
+  if(NOT CMAKE_VERSION VERSION_LESS 3.16)
+    target_precompile_headers(mt32emu-qt
+      PRIVATE ${${PROJECT_NAME}_PRECOMPILED_HEADER}
+    )
+  elseif(XCODE)
+    set_target_properties(${PROJECT_NAME}
+      PROPERTIES
+        XCODE_ATTRIBUTE_GCC_PRECOMPILE_PREFIX_HEADER "YES"
+        XCODE_ATTRIBUTE_GCC_PREFIX_HEADER "${${PROJECT_NAME}_PRECOMPILED_HEADER}"
+    )
+  endif(NOT CMAKE_VERSION VERSION_LESS 3.16)
+endif(${PROJECT_NAME}_PRECOMPILED_HEADER)
 
 target_link_libraries(mt32emu-qt
   ${EXT_LIBS}
@@ -326,8 +345,13 @@ install(TARGETS
   DESTINATION bin
 )
 
+if(UNIX AND NOT APPLE)
+  install(FILES res/mt32emu-qt.desktop DESTINATION share/applications)
+  install(FILES res/munt.png DESTINATION share/pixmaps)
+endif(UNIX AND NOT APPLE)
+
 install(FILES
-  AUTHORS.txt COPYING.txt NEWS.txt README.txt TODO.txt
+  AUTHORS.txt COPYING.txt NEWS.txt README.md TODO.txt
   DESTINATION share/doc/munt/mt32emu-qt
 )
 
@@ -341,16 +365,19 @@ set(CPACK_PACKAGE_CONTACT "sergm@muntemu.org")
 set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../FreeBSD/usr/ports/audio/mt32emu_qt/pkg-descr")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Main MT-32 emulation application using libmt32emu")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING.txt")
-set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.txt")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 set(CPACK_STRIP_FILES TRUE)
+# The default package file name has "-${CPACK_SYSTEM_NAME}" at the end, which doesn't match our previous releases
+set(CPACK_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}-${mt32emu_qt_VERSION}")
+set(CPACK_SOURCE_PACKAGE_FILE_NAME "${CPACK_PACKAGE_FILE_NAME}")
 set(CPACK_SOURCE_GENERATOR TGZ)
 set(CPACK_SOURCE_STRIP_FILES TRUE)
-# The default source package file name has "-Source" at the end, which doesn't match our previous releases
-set(CPACK_SOURCE_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
 set(CPACK_PACKAGE_EXECUTABLES mt32emu-qt;Munt\ MT-32\ Sound\ Module\ Emulator)
 set(CPACK_RPM_PACKAGE_GROUP "Audio/Emulators")
-set(CPACK_RPM_PACKAGE_LICENSE "GPLv3")
+set(CPACK_RPM_PACKAGE_LICENSE "GPLv3+")
 set(CPACK_RPM_PACKAGE_URL "http://munt.sourceforge.net/")
+# These two directories pre-exist on a freedesktop-conforming system and cause conflict if not excluded
+set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION /usr/share/applications /usr/share/pixmaps)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS "ON")
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "http://munt.sourceforge.net/")
 set(CPACK_DEBIAN_PACKAGE_SECTION "sound")

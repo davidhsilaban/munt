@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2019 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,7 +14,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <locale>
+#include <clocale>
 #include <QApplication>
 
 #include "MainWindow.h"
@@ -25,7 +25,7 @@ int main(int argv, char **args) {
 	app.setApplicationName("Munt mt32emu-qt");
 	app.setQuitOnLastWindowClosed(false);
 	{
-		std::locale::global(std::locale(""));
+		setlocale(LC_ALL, "");
 		Master master;
 		QSystemTrayIcon *trayIcon = NULL;
 		if (QSystemTrayIcon::isSystemTrayAvailable()) {

@@ -34,9 +34,14 @@ static const ROMInfo *getKnownROMInfoFromList(Bit32u index) {
 	static const ROMInfo CTRL_MT32_V2_04 = {131072, "2c16432b6c73dd2a3947cba950a0f4c19d6180eb", ROMInfo::Control, "ctrl_mt32_2_04", "MT-32 Control v2.04", ROMInfo::Full, NULL};
 	static const ROMInfo CTRL_CM32L_V1_00 = {65536, "73683d585cd6948cc19547942ca0e14a0319456d", ROMInfo::Control, "ctrl_cm32l_1_00", "CM-32L/LAPC-I Control v1.00", ROMInfo::Full, NULL};
 	static const ROMInfo CTRL_CM32L_V1_02 = {65536, "a439fbb390da38cada95a7cbb1d6ca199cd66ef8", ROMInfo::Control, "ctrl_cm32l_1_02", "CM-32L/LAPC-I Control v1.02", ROMInfo::Full, NULL};
+	//static const ROMInfo CTRL_D110_V1_10 = {163840, "8d549f3382a23b8faa64e3988f913d403a92887f", ROMInfo::Control, "ctrl_d110_1_10", "D-110 Control v1.10", ROMInfo::Full, NULL };
+	static const ROMInfo CTRL_D110_V1_10_1 = { 163840, "8b064509db7520e0633b8bea9e3ce3945fc7de54", ROMInfo::Control, "ctrl_d110_1_10_1", "D-110 Control v1.10", ROMInfo::Full, NULL };
+	static const ROMInfo CTRL_D110_V1_10_2 = { 163840, "8d549f3382a23b8faa64e3988f913d403a92887f", ROMInfo::Control, "ctrl_d110_1_10_2", "D-110 Control v1.10", ROMInfo::Full, NULL };
 
 	static const ROMInfo PCM_MT32 = {524288, "f6b1eebc4b2d200ec6d3d21d51325d5b48c60252", ROMInfo::PCM, "pcm_mt32", "MT-32 PCM ROM", ROMInfo::Full, NULL};
 	static const ROMInfo PCM_CM32L = {1048576, "289cc298ad532b702461bfc738009d9ebe8025ea", ROMInfo::PCM, "pcm_cm32l", "CM-32L/CM-64/LAPC-I PCM ROM", ROMInfo::Full, NULL};
+	static const ROMInfo PCM_D110 = { 1048576, "8eb2e3857a36272eb66d64d8dcb82a6b14c8d26e", ROMInfo::PCM, "pcm_d110", "D-110 PCM ROM", ROMInfo::Full, NULL };
+	//static const ROMInfo PCM_D110 = { 1048576, "", ROMInfo::PCM, "pcm_d110", "D-110 PCM ROM", ROMInfo::Full, NULL };
 
 	static const ROMInfo * const ROM_INFOS[] = {
 		&CTRL_MT32_V1_04,
@@ -47,8 +52,11 @@ static const ROMInfo *getKnownROMInfoFromList(Bit32u index) {
 		&CTRL_MT32_V2_04,
 		&CTRL_CM32L_V1_00,
 		&CTRL_CM32L_V1_02,
+		&CTRL_D110_V1_10_1,
+		&CTRL_D110_V1_10_2,
 		&PCM_MT32,
 		&PCM_CM32L,
+		&PCM_D110,
 		NULL};
 
 	return ROM_INFOS[index];

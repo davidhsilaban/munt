@@ -783,7 +783,9 @@ bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, B
 
 	char(*writableSoundGroupNames)[9] = new char[controlROMMap->soundGroupsCount][9];
 	soundGroupNames = writableSoundGroupNames;
-	initSoundGroups(writableSoundGroupNames);
+	if (controlROMMap->soundGroupsCount > 0) {
+		initSoundGroups(writableSoundGroupNames);
+	}
 
 	for (int i = 0; i < 9; i++) {
 		MemParams::PatchTemp *patchTemp = &mt32ram.patchTemp[i];

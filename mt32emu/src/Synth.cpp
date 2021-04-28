@@ -2451,16 +2451,21 @@ bool Synth::isActive() {
 	return false;
 }
 
+bool Synth::isSuper() const {
+    return useSuper;
+}
+
 Bit32u Synth::getPartialCount() const {
 	return partialCount;
 }
 
 void Synth::getPartStates(bool *partStates) const {
+    int partCount = useSuper ? 16 : 9;
 	if (!opened) {
-		memset(partStates, 0, 9 * sizeof(bool));
+		memset(partStates, 0, partCount * sizeof(bool));
 		return;
 	}
-	for (int partNumber = 0; partNumber < 9; partNumber++) {
+	for (int partNumber = 0; partNumber < partCount; partNumber++) {
 		const Part *part = parts[partNumber];
 		partStates[partNumber] = part->getActiveNonReleasingPartialCount() > 0;
 	}
@@ -2468,13 +2473,23 @@ void Synth::getPartStates(bool *partStates) const {
 
 Bit32u Synth::getPartStates() const {
 	if (!opened) return 0;
-	bool partStates[9];
-	getPartStates(partStates);
-	Bit32u bitSet = 0;
-	for (int partNumber = 8; partNumber >= 0; partNumber--) {
-		bitSet = (bitSet << 1) | (partStates[partNumber] ? 1 : 0);
-	}
-	return bitSet;
+    if (useSuper) {
+        bool partStates[16];
+        getPartStates(partStates);
+        Bit32u bitSet = 0;
+        for (int partNumber = 15; partNumber >= 0; partNumber--) {
+            bitSet = (bitSet << 1) | (partStates[partNumber] ? 1 : 0);
+        }
+        return bitSet;
+    } else {
+        bool partStates[9];
+        getPartStates(partStates);
+        Bit32u bitSet = 0;
+        for (int partNumber = 8; partNumber >= 0; partNumber--) {
+            bitSet = (bitSet << 1) | (partStates[partNumber] ? 1 : 0);
+        }
+        return bitSet;
+    }
 }
 
 void Synth::getPartialStates(PartialState *partialStates) const {
@@ -2506,7 +2521,8 @@ void Synth::getPartialStates(Bit8u *partialStates) const {
 
 Bit32u Synth::getPlayingNotes(Bit8u partNumber, Bit8u *keys, Bit8u *velocities) const {
 	Bit32u playingNotes = 0;
-	if (opened && (partNumber < 9)) {
+    unsigned int partCount = useSuper ? 16 : 9;
+	if (opened && (partNumber < partCount)) {
 		const Part *part = parts[partNumber];
 		const Poly *poly = part->getFirstActivePoly();
 		while (poly != NULL) {
@@ -2520,11 +2536,13 @@ Bit32u Synth::getPlayingNotes(Bit8u partNumber, Bit8u *keys, Bit8u *velocities) 
 }
 
 const char *Synth::getPatchName(Bit8u partNumber) const {
-	return (!opened || partNumber > 8) ? NULL : parts[partNumber]->getCurrentInstr();
+    unsigned int partCount = useSuper ? 16 : 9;
+	return (!opened || partNumber > partCount) ? NULL : parts[partNumber]->getCurrentInstr();
 }
 
 const Part *Synth::getPart(Bit8u partNum) const {
-	if (partNum > 8) {
+    unsigned int partCount = useSuper ? 16 : 9;
+	if (partNum > partCount) {
 		return NULL;
 	}
 	return parts[partNum];

@@ -647,16 +647,24 @@ void Synth::initSoundGroups(char newSoundGroupNames[][9]) {
 }
 
 bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, AnalogOutputMode analogOutputMode) {
-	return open(controlROMImage, pcmROMImage, DEFAULT_MAX_PARTIALS, analogOutputMode);
+	return open(controlROMImage, pcmROMImage, DEFAULT_MAX_PARTIALS, analogOutputMode, false);
 }
 
-bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, Bit32u usePartialCount, AnalogOutputMode analogOutputMode) {
+bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, Bit32u usePartialCount, AnalogOutputMode analogOutputMode, bool useSuper) {
 	if (opened) {
 		return false;
 	}
+    this->useSuper = useSuper;
 	partialCount = usePartialCount;
 	abortingPoly = NULL;
 	extensions.abortingPartIx = 0;
+    if (useSuper) {
+        patchTempSuper = new MemParams::PatchTemp[7];
+        timbreTempSuper = new TimbreParam[7];
+    } else {
+        patchTempSuper = NULL;
+        timbreTempSuper = NULL;
+    }
 
 	// This is to help detect bugs
 	memset(&mt32ram, '?', sizeof(mt32ram));
@@ -773,6 +781,12 @@ bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, B
 		// The channel assignment is then {0, 1, 2, 3, 4, 5, 6, 7, 9}
 		mt32ram.system.chanAssign[i] = i + 1;
 	}
+	if (useSuper) {
+		chanAssignSuper[0] = !mt32ram.system.chanAssign[0];
+		for (Bit8u i = 1; i < 7; i++) {
+			chanAssignSuper[i] = i + 9;
+		}
+	}
 	mt32ram.system.masterVol = 100; // Confirmed
 
 	bool oldReverbOverridden = reverbOverridden;
@@ -787,8 +801,9 @@ bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, B
 		initSoundGroups(writableSoundGroupNames);
 	}
 
-	for (int i = 0; i < 9; i++) {
-		MemParams::PatchTemp *patchTemp = &mt32ram.patchTemp[i];
+    int numParts = useSuper ? 16 : 9;
+    for (int i = 0; i < numParts; i++) {
+        MemParams::PatchTemp *patchTemp = i < 9 ? &mt32ram.patchTemp[i] : (MemParams::PatchTemp *)patchTempSuper + i - 9;
 
 		// Note that except for the rhythm part, these patch fields will be set in setProgram() below anyway.
 		patchTemp->patch.timbreGroup = 0;
@@ -805,9 +820,9 @@ bool Synth::open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, B
 		memset(patchTemp->dummyv, 0, sizeof(patchTemp->dummyv));
 		patchTemp->dummyv[1] = 127;
 
-		if (i < 8) {
+		if (i != 8) {
 			parts[i] = new Part(this, i);
-			parts[i]->setProgram(controlROMData[controlROMMap->programSettings + i]);
+			parts[i]->setProgram(i < 9 ? controlROMData[controlROMMap->programSettings + i] : 0);
 		} else {
 			parts[i] = new RhythmPart(this, i);
 		}
@@ -869,7 +884,8 @@ void Synth::dispose() {
 	delete partialManager;
 	partialManager = NULL;
 
-	for (int i = 0; i < 9; i++) {
+	int numParts = useSuper ? 16 : 9;
+	for (int i = 0; i < numParts; i++) {
 		delete parts[i];
 		parts[i] = NULL;
 	}
@@ -884,6 +900,11 @@ void Synth::dispose() {
 	pcmROMData = NULL;
 
 	deleteMemoryRegions();
+    
+    delete[] (MemParams::PatchTemp*)patchTempSuper;
+    delete[] (TimbreParam *)timbreTempSuper;
+    patchTempSuper = NULL;
+    timbreTempSuper = NULL;
 
 	for (int i = REVERB_MODE_ROOM; i <= REVERB_MODE_TAP_DELAY; i++) {
 		delete reverbModels[i];
@@ -1037,7 +1058,8 @@ void Synth::playMsgNow(Bit32u msg) {
 	//printDebug("Playing chan %d, code 0x%01x note: 0x%02x", chan, code, note);
 
 	Bit8u *chanParts = extensions.chantable[chan];
-	if (*chanParts > 8) {
+    int maxPart = useSuper ? 15 : 8;
+	if (*chanParts > maxPart) {
 #if MT32EMU_MONITOR_MIDI > 0
 		printDebug("Play msg on unreg chan %d (%d): code=0x%01x, vel=%d", chan, *chanParts, code, velocity);
 #endif
@@ -1086,6 +1108,9 @@ void Synth::playMsgOnPart(Bit8u part, Bit8u code, Bit8u note, Bit8u velocity) {
 			break;
 		case 0x06:
 			parts[part]->setDataEntryMSB(velocity);
+			break;
+		case 0x26:
+			parts[part]->setDataEntryLSB(velocity);
 			break;
 		case 0x07:  // Set volume
 			//printDebug("Volume set: %d", velocity);
@@ -1286,13 +1311,14 @@ void Synth::writeSysex(Bit8u device, const Bit8u *sysex, Bit32u len) {
 		if (/*addr >= MT32EMU_MEMADDR(0x000000) && */addr < MT32EMU_MEMADDR(0x010000)) {
 			addr += MT32EMU_MEMADDR(0x030000);
 			Bit8u *chanParts = extensions.chantable[device];
-			if (*chanParts > 8) {
+            int maxPart = useSuper ? 15 : 8;
+			if (*chanParts > maxPart) {
 #if MT32EMU_MONITOR_SYSEX > 0
 				printDebug(" (Channel not mapped to a part... 0 offset)");
 #endif
 			} else {
-				for (Bit32u partIx = 0; partIx <= 8; partIx++) {
-					if (chanParts[partIx] > 8) break;
+				for (Bit32u partIx = 0; partIx <= maxPart; partIx++) {
+					if (chanParts[partIx] > maxPart) break;
 					int offset;
 					if (chanParts[partIx] == 8) {
 #if MT32EMU_MONITOR_SYSEX > 0
@@ -1300,10 +1326,15 @@ void Synth::writeSysex(Bit8u device, const Bit8u *sysex, Bit32u len) {
 #endif
 						offset = 0;
 					} else {
-						offset = chanParts[partIx] * sizeof(MemParams::PatchTemp);
+                        if (useSuper && chanParts[partIx] > 8) {
+                            offset = 0;
+                            printDebug(" (Channel mapped to super parts... 0 offset)");
+                        } else {
+                            offset = chanParts[partIx] * sizeof(MemParams::PatchTemp);
 #if MT32EMU_MONITOR_SYSEX > 0
-						printDebug(" (Setting extra offset to %d)", offset);
+                            printDebug(" (Setting extra offset to %d)", offset);
 #endif
+                        }
 					}
 					writeSysexGlobal(addr + offset, sysex, len);
 				}
@@ -1631,7 +1662,8 @@ void Synth::writeMemoryRegion(const MemoryRegion *region, Bit32u addr, Bit32u le
 #endif
 			// FIXME:KG: Not sure if the stuff below should be done (for rhythm and/or parts)...
 			// Does the real MT-32 automatically do this?
-			for (unsigned int part = 0; part < 9; part++) {
+			unsigned int numParts = useSuper ? 16 : 9;
+			for (unsigned int part = 0; part < numParts; part++) {
 				if (parts[part] != NULL) {
 					parts[part]->refreshTimbre(i);
 				}
@@ -1745,6 +1777,19 @@ void Synth::refreshSystemReserveSettings() {
 #if MT32EMU_MONITOR_SYSEX > 0
 	printDebug(" Partial reserve: 1=%02d 2=%02d 3=%02d 4=%02d 5=%02d 6=%02d 7=%02d 8=%02d Rhythm=%02d", rset[0], rset[1], rset[2], rset[3], rset[4], rset[5], rset[6], rset[7], rset[8]);
 #endif
+    Bit8u rset_[16];
+    if (useSuper) {
+        memcpy(rset_, rset, 9);
+        unsigned int pr = 0, i;
+        for (i = 0; i < 9; i++) {
+            pr += rset[i];
+        }
+        pr = (partialCount - pr) / 7;
+        for (i = 9; i < 16; i++) {
+            rset_[i] = pr;
+        }
+        rset = rset_;
+    }
 	partialManager->setReserve(rset);
 }
 

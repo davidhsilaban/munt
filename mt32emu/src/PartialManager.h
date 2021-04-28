@@ -35,7 +35,7 @@ private:
 	Part **parts;
 	Poly **freePolys;
 	Partial **partialTable;
-	Bit8u numReservedPartialsForPart[9];
+	Bit8u numReservedPartialsForPart[16];
 	Bit32u firstFreePolyIndex;
 	int *inactivePartials; // Holds indices of inactive Partials in the Partial table
 	Bit32u inactivePartialCount;

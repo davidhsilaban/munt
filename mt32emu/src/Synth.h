@@ -53,6 +53,7 @@ struct ControlROMFeatureSet;
 struct ControlROMMap;
 struct PCMWaveEntry;
 struct MemParams;
+struct TimbreParam;
 
 const Bit8u SYSEX_MANUFACTURER_ROLAND = 0x41;
 
@@ -163,6 +164,11 @@ private:
 
 	MemParams &mt32ram, &mt32default;
 
+	// Super!
+	Bit8u chanAssignSuper[7];
+	void * patchTempSuper;
+	void * timbreTempSuper;
+
 	BReverbModel *reverbModels[4];
 	BReverbModel *reverbModel;
 	bool reverbOverridden;
@@ -177,12 +183,13 @@ private:
 
 	bool opened;
 	bool activated;
+    bool useSuper;
 
 	bool isDefaultReportHandler;
 	ReportHandler *reportHandler;
 
 	PartialManager *partialManager;
-	Part *parts[9];
+	Part *parts[16];
 
 	// When a partial needs to be aborted to free it up for use by a new Poly,
 	// the controller will busy-loop waiting for the sound to finish.
@@ -296,7 +303,8 @@ public:
 	// controlROMImage and pcmROMImage represent Control and PCM ROM images for use by synth.
 	// usePartialCount sets the maximum number of partials playing simultaneously for this session (optional).
 	// analogOutputMode sets the mode for emulation of analogue circuitry of the hardware units (optional).
-	MT32EMU_EXPORT bool open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, Bit32u usePartialCount = DEFAULT_MAX_PARTIALS, AnalogOutputMode analogOutputMode = AnalogOutputMode_COARSE);
+    // useSuper enables the "super" synthesis mode, which adds virtual channels to map up to 16 with spare partials
+    MT32EMU_EXPORT bool open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, Bit32u usePartialCount = DEFAULT_MAX_PARTIALS, AnalogOutputMode analogOutputMode = AnalogOutputMode_COARSE, bool useSuper = false);
 
 	// Overloaded method which opens the synth with default partial count.
 	MT32EMU_EXPORT bool open(const ROMImage &controlROMImage, const ROMImage &pcmROMImage, AnalogOutputMode analogOutputMode);
@@ -500,6 +508,9 @@ public:
 	// The synth is considered active when either there are pending MIDI events in the queue, there is at least one active partial,
 	// or the reverb is (somewhat unreliably) detected as being active.
 	MT32EMU_EXPORT bool isActive();
+    
+    // Returns if in Super mode
+    MT32EMU_EXPORT bool isSuper() const;
 
 	// Returns the maximum number of partials playing simultaneously.
 	MT32EMU_EXPORT Bit32u getPartialCount() const;

@@ -105,8 +105,8 @@ unsigned int PartialManager::getFreePartialCount() {
 }
 
 // This function is solely used to gather data for debug output at the moment.
-void PartialManager::getPerPartPartialUsage(unsigned int perPartPartialUsage[9]) {
-	memset(perPartPartialUsage, 0, 9 * sizeof(unsigned int));
+void PartialManager::getPerPartPartialUsage(unsigned int perPartPartialUsage[16]) {
+	memset(perPartPartialUsage, 0, 16 * sizeof(unsigned int));
 	for (unsigned int i = 0; i < synth->getPartialCount(); i++) {
 		if (partialTable[i]->isActive()) {
 			perPartPartialUsage[partialTable[i]->getOwnerPart()]++;
@@ -123,7 +123,8 @@ bool PartialManager::abortFirstReleasingPolyWhereReserveExceeded(int minPart) {
 		// Rhythm is highest priority
 		minPart = -1;
 	}
-	for (int partNum = 7; partNum >= minPart; partNum--) {
+	for (int partNum = synth->isSuper() ? 15 : 7; partNum >= minPart; partNum--) {
+		if (partNum == 8) partNum = 7;
 		int usePartNum = partNum == -1 ? 8 : partNum;
 		if (parts[usePartNum]->getActivePartialCount() > numReservedPartialsForPart[usePartNum]) {
 			// This part has exceeded its reserved partial count.
@@ -145,7 +146,8 @@ bool PartialManager::abortFirstPolyPreferHeldWhereReserveExceeded(int minPart) {
 		// Rhythm is highest priority
 		minPart = -1;
 	}
-	for (int partNum = 7; partNum >= minPart; partNum--) {
+	for (int partNum = synth->isSuper() ? 15 : 7; partNum >= minPart; partNum--) {
+		if (partNum == 8) partNum = 7;
 		int usePartNum = partNum == -1 ? 8 : partNum;
 		if (parts[usePartNum]->getActivePartialCount() > numReservedPartialsForPart[usePartNum]) {
 			// This part has exceeded its reserved partial count.
@@ -276,7 +278,7 @@ Poly *PartialManager::assignPolyToPart(Part *part) {
 void PartialManager::polyFreed(Poly *poly) {
 	if (0 == firstFreePolyIndex) {
 		synth->printDebug("PartialManager Error: Cannot return freed poly, currently active polys:\n");
-		for (Bit32u partNum = 0; partNum < 9; partNum++) {
+		for (Bit32u partNum = 0; partCount = synth->isSuper() ? 16 : 9; partNum++) {
 			const Poly *activePoly = synth->getPart(partNum)->getFirstActivePoly();
 			Bit32u polyCount = 0;
 			while (activePoly != NULL) {

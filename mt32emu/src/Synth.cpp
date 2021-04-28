@@ -202,7 +202,7 @@ public:
 
 	// Here we keep the reverse mapping of assigned parts per MIDI channel.
 	// NOTE: value above 8 means that the channel is not assigned
-	Bit8u chantable[16][9];
+	Bit8u chantable[16][16];
 
 	// This stores the index of Part in chantable that failed to play and required partial abortion.
 	Bit32u abortingPartIx;
@@ -1065,9 +1065,9 @@ void Synth::playMsgNow(Bit32u msg) {
 #endif
 		return;
 	}
-	for (Bit32u i = extensions.abortingPartIx; i <= 8; i++) {
+	for (Bit32u i = extensions.abortingPartIx; i <= maxPart; i++) {
 		const Bit32u partNum = chanParts[i];
-		if (partNum > 8) break;
+		if (partNum > maxPart) break;
 		playMsgOnPart(partNum, code, note, velocity);
 		if (isAbortingPoly()) {
 			extensions.abortingPartIx = i;
@@ -1795,20 +1795,39 @@ void Synth::refreshSystemReserveSettings() {
 
 void Synth::refreshSystemChanAssign(Bit8u firstPart, Bit8u lastPart) {
 	memset(extensions.chantable, 0xFF, sizeof(extensions.chantable));
+    
+    // Fill out the Super channel map with any unmapped channels
+    if (useSuper) {
+        for (unsigned int i = 0, j = 0; i < 16 && j < 7; i++) {
+            unsigned int k;
+            for (k = 0; k < 9; k++) {
+                if (mt32ram.system.chanAssign[k] == i) break;
+            }
+            if (k == 9) {
+                if (chanAssignSuper[j] != i) {
+                    parts[chanAssignSuper[j]]->allSoundOff();
+                    parts[chanAssignSuper[j]]->resetAllControllers();
+                }
+                chanAssignSuper[j] = i;
+                j++;
+            }
+        }
+    }
 
 	// CONFIRMED: In the case of assigning a MIDI channel to multiple parts,
 	//            the messages received on that MIDI channel are handled by all the parts.
-	for (Bit32u i = 0; i <= 8; i++) {
+    unsigned int numParts = useSuper ? 16 : 9;
+	for (Bit32u i = 0; i < numParts; i++) {
 		if (parts[i] != NULL && i >= firstPart && i <= lastPart) {
 			// CONFIRMED: Decay is started for all polys, and all controllers are reset, for every part whose assignment was touched by the sysex write.
 			parts[i]->allSoundOff();
 			parts[i]->resetAllControllers();
 		}
-		Bit8u chan = mt32ram.system.chanAssign[i];
+        Bit8u chan = i < 9 ? mt32ram.system.chanAssign[i] : chanAssignSuper[i - 9];
 		if (chan > 15) continue;
 		Bit8u *chanParts = extensions.chantable[chan];
-		for (Bit32u j = 0; j <= 8; j++) {
-			if (chanParts[j] > 8) {
+		for (Bit32u j = 0; j < numParts; j++) {
+			if (chanParts[j] > 15) {
 				chanParts[j] = Bit8u(i);
 				break;
 			}
@@ -1851,6 +1870,12 @@ void Synth::reset() {
 			parts[8]->refresh();
 		}
 	}
+    if (useSuper) {
+        for (int i = 9; i < 16; i++) {
+            parts[i]->reset();
+            parts[i]->refresh();
+        }
+    }
 	refreshSystem();
 	resetMasterTunePitchDelta();
 	isActive();
@@ -2416,7 +2441,7 @@ void RendererImpl<Sample>::produceStreams(const DACOutputStreams<Sample> &stream
 }
 
 void Synth::printPartialUsage(Bit32u sampleOffset) {
-	unsigned int partialUsage[9];
+	unsigned int partialUsage[16];
 	partialManager->getPerPartPartialUsage(partialUsage);
 	if (sampleOffset > 0) {
 		printDebug("[+%u] Partial Usage: 1:%02d 2:%02d 3:%02d 4:%02d 5:%02d 6:%02d 7:%02d 8:%02d R: %02d  TOTAL: %02d", sampleOffset, partialUsage[0], partialUsage[1], partialUsage[2], partialUsage[3], partialUsage[4], partialUsage[5], partialUsage[6], partialUsage[7], partialUsage[8], getPartialCount() - partialManager->getFreePartialCount());

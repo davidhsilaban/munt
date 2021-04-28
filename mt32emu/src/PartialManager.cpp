@@ -278,7 +278,7 @@ Poly *PartialManager::assignPolyToPart(Part *part) {
 void PartialManager::polyFreed(Poly *poly) {
 	if (0 == firstFreePolyIndex) {
 		synth->printDebug("PartialManager Error: Cannot return freed poly, currently active polys:\n");
-		for (Bit32u partNum = 0; partCount = synth->isSuper() ? 16 : 9; partNum++) {
+        for (Bit32u partNum = 0, partCount = synth->isSuper() ? 16 : 9; partNum < partCount; partNum++) {
 			const Poly *activePoly = synth->getPart(partNum)->getFirstActivePoly();
 			Bit32u polyCount = 0;
 			while (activePoly != NULL) {

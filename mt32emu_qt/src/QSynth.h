@@ -150,6 +150,7 @@ public:
 	unsigned int getPartialCount() const;
 	unsigned int getSynthSampleRate() const;
 	bool isActive() const;
+    bool isSuper() const;
 
 	void startRecordingAudio(const QString &fileName);
 	void stopRecordingAudio();

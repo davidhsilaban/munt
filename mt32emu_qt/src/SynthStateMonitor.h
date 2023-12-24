@@ -98,8 +98,8 @@ private:
 	LCDWidget lcdWidget;
 	LEDWidget midiMessageLED;
 	LEDWidget **partialStateLED;
-	QLabel *patchNameLabel[9];
-	PartStateWidget *partStateWidget[9];
+	QLabel *patchNameLabel[16];
+	PartStateWidget *partStateWidget[16];
 
 	MT32Emu::PartialState *partialStates;
 	MT32Emu::Bit8u *keysOfPlayingNotes;

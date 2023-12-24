@@ -48,6 +48,7 @@ public:
 	void getPartialStates(MT32Emu::PartialState *partialStates) const;
 	unsigned int getPlayingNotes(unsigned int partNumber, MT32Emu::Bit8u *keys, MT32Emu::Bit8u *velocities) const;
 	unsigned int getPartialCount() const;
+    bool isSuper() const;
 
 	void flushMIDIQueue();
 	void playMIDIShortMessageNow(MT32Emu::Bit32u msg);

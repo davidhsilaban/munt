@@ -47,7 +47,8 @@ SynthStateMonitor::SynthStateMonitor(Ui::SynthWidget *ui, SynthRoute *useSynthRo
 	midiMessageLED.setMinimumSize(10, 2);
 	ui->midiMessageLayout->addWidget(&midiMessageLED, 0, Qt::AlignHCenter);
 
-	for (int i = 0; i < 9; i++) {
+    int numParts = synthRoute->isSuper() ? 16 : 9;
+	for (int i = 0; i < numParts; i++) {
 		patchNameLabel[i] = new QLabel(ui->polyStateGrid->widget());
 		ui->polyStateGrid->addWidget(patchNameLabel[i], i, 0);
 
@@ -68,7 +69,8 @@ SynthStateMonitor::SynthStateMonitor(Ui::SynthWidget *ui, SynthRoute *useSynthRo
 }
 
 SynthStateMonitor::~SynthStateMonitor() {
-	for (int i = 0; i < 9; i++) {
+    int numParts = synthRoute->isSuper() ? 16 : 9;
+	for (int i = 0; i < numParts; i++) {
 		delete partStateWidget[i];
 		delete patchNameLabel[i];
 	}
@@ -100,7 +102,8 @@ void SynthStateMonitor::handleSynthStateChange(SynthState state) {
 		allocatePartialsData();
 	}
 
-	for (int i = 0; i < 9; i++) {
+    int numParts = synthRoute->isSuper() ? 16 : 9;
+	for (int i = 0; i < numParts; i++) {
 		patchNameLabel[i]->setText((i < 8) ? synthRoute->getPatchName(i) : "Rhythm Channel");
 		partStateWidget[i]->update();
 	}

@@ -322,6 +322,10 @@ void SynthRoute::getPartialStates(PartialState *partialStates) const {
 	qSynth.getPartialStates(partialStates);
 }
 
+bool SynthRoute::isSuper() const {
+    return qSynth.isSuper();
+}
+
 unsigned int SynthRoute::getPlayingNotes(unsigned int partNumber, MT32Emu::Bit8u *keys, MT32Emu::Bit8u *velocities) const {
 	return qSynth.getPlayingNotes(partNumber, keys, velocities);
 }

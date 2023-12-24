@@ -234,7 +234,7 @@ bool QSynth::open(uint &targetSampleRate, SamplerateConversionQuality srcQuality
 
 	targetSampleRate = SampleRateConverter::getSupportedOutputSampleRate(targetSampleRate);
 
-	if (synth->open(*controlROMImage, *pcmROMImage, Bit32u(synthProfile.partialCount), actualAnalogOutputMode)) {
+	if (synth->open(*controlROMImage, *pcmROMImage, Bit32u(synthProfile.partialCount), actualAnalogOutputMode, true)) {
 		setState(SynthState_OPEN);
 		reportHandler.onDeviceReconfig();
 		setSynthProfile(synthProfile, synthProfileName);
@@ -453,6 +453,17 @@ bool QSynth::isActive() const {
 	bool result = synth->isActive();
 	synthMutex->unlock();
 	return result;
+}
+
+bool QSynth::isSuper() const {
+    synthMutex->lock();
+    if (!isOpen()) {
+        synthMutex->unlock();
+        return false;
+    }
+    bool result = synth->isSuper();
+    synthMutex->unlock();
+    return result;
 }
 
 bool QSynth::reset() {

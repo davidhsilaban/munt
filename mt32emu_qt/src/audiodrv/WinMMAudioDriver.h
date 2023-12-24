@@ -5,7 +5,6 @@
 #include <windows.h>
 #include <mt32emu/mt32emu.h>
 #include "AudioDriver.h"
-#include "../MasterClock.h"
 
 #ifndef _UINTPTR_T_DEFINED
 // For MinGW
@@ -13,6 +12,7 @@
 #endif
 
 class Master;
+class SynthRoute;
 class WinMMAudioDriver;
 class WinMMAudioDevice;
 class WinMMAudioStream;
@@ -32,7 +32,7 @@ class WinMMAudioStream : public AudioStream {
 	friend class WinMMAudioProcessor;
 private:
 	HWAVEOUT hWaveOut;
-	WAVEHDR	 *waveHdr;
+	WAVEHDR *waveHdr;
 	HANDLE hEvent;
 	HANDLE hWaitableTimer;
 
@@ -47,7 +47,7 @@ private:
 	DWORD getCurrentPlayPosition();
 
 public:
-	WinMMAudioStream(const AudioDriverSettings &useSettings, bool ringBufferMode, QSynth &useSynth, uint useSampleRate);
+	WinMMAudioStream(const AudioDriverSettings &useSettings, bool ringBufferMode, SynthRoute &synthRoute, uint useSampleRate);
 	~WinMMAudioStream();
 	bool start(int deviceIndex);
 	void close();
@@ -59,7 +59,7 @@ private:
 	UINT deviceIndex;
 	WinMMAudioDevice(WinMMAudioDriver &driver, int useDeviceIndex, QString useDeviceName);
 public:
-	AudioStream *startAudioStream(QSynth &synth, const uint sampleRate) const;
+	AudioStream *startAudioStream(SynthRoute &synthRoute, const uint sampleRate) const;
 };
 
 class WinMMAudioDriver : public AudioDriver {

@@ -10,8 +10,7 @@ namespace Ui {
 	class SynthPropertiesDialog;
 }
 
-class SynthPropertiesDialog : public QDialog
-{
+class SynthPropertiesDialog : public QDialog {
 	Q_OBJECT
 
 public:
@@ -45,12 +44,17 @@ private slots:
 	void on_profileComboBox_currentIndexChanged(int);
 	void on_reverbCheckBox_stateChanged(int state);
 	void on_outputGainSlider_valueChanged(int value);
+	void on_outputGainSpinBox_editingFinished();
 	void on_reverbOutputGainSlider_valueChanged(int value);
+	void on_reverbOutputGainSpinBox_editingFinished();
 	void on_reverseStereoCheckBox_stateChanged(int state);
 	void on_assignChannels2_10Button_clicked();
 	void on_assignChannels1_8_10Button_clicked();
 	void on_niceAmpRampCheckBox_stateChanged(int state);
 	void on_engageChannel1CheckBox_stateChanged(int state);
+	void on_nicePanningCheckBox_stateChanged(int state);
+	void on_nicePartialMixingCheckBox_stateChanged(int state);
+	void on_displayCompatibilityComboBox_currentIndexChanged(int);
 	void updateReverbSettings();
 	void handleReverbModeChanged(int mode);
 	void handleReverbTimeChanged(int time);

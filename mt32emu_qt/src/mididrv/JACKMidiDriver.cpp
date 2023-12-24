@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 
 #include <QtCore>
 
+#include "../Master.h"
 #include "../MasterClock.h"
 #include "../MidiSession.h"
 #include "../JACKClient.h"
@@ -106,6 +107,9 @@ bool JACKMidiDriver::createJACKPort(bool exclusive) {
 	MidiSession *midiSession = createMidiSession(portName);
 	JACKClient *jackClient = new JACKClient;
 	JACKClientState state = jackClient->open(midiSession, NULL);
+	if (JACKClientState_OPENING == state) {
+		state = jackClient->start();
+	}
 	if (JACKClientState_OPEN == state) {
 		jackClients.append(jackClient);
 		if (jackClient->isRealtimeProcessing()) {

@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -188,6 +188,12 @@ const QList<const AudioDevice *> CoreAudioDriver::createDeviceList() {
 	QList<const AudioDevice *> deviceList;
 	deviceList.append(new CoreAudioDevice(*this)); // default device
 
+#if defined(MAC_OS_VERSION_12_0) && (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_VERSION_12_0)
+	AudioObjectPropertyElement addressElement = kAudioObjectPropertyElementMain;
+#else
+	AudioObjectPropertyElement addressElement = kAudioObjectPropertyElementMaster;
+#endif
+
 	// Get system output devices
 	UInt32 propertySize = 0;
 	int numDevices = 0;
@@ -195,7 +201,7 @@ const QList<const AudioDevice *> CoreAudioDriver::createDeviceList() {
 	AudioObjectPropertyAddress propertyAddress;
 	propertyAddress.mSelector = kAudioHardwarePropertyDevices;
 	propertyAddress.mScope = kAudioObjectPropertyScopeGlobal;
-	propertyAddress.mElement = kAudioObjectPropertyElementMaster;
+	propertyAddress.mElement = addressElement;
 
 	if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &propertyAddress, 0, 0, &propertySize) == noErr) {
 		numDevices = propertySize / sizeof(AudioDeviceID);
@@ -207,7 +213,7 @@ const QList<const AudioDevice *> CoreAudioDriver::createDeviceList() {
 				propertySize = 0;
 				deviceAddress.mSelector = kAudioDevicePropertyStreams;
 				deviceAddress.mScope = kAudioObjectPropertyScopeOutput;
-				deviceAddress.mElement = kAudioObjectPropertyElementMaster;
+				deviceAddress.mElement = addressElement;
 
 				if (AudioObjectGetPropertyDataSize(id, &deviceAddress, 0, NULL, &propertySize) == noErr) {
 					if (propertySize > 0) {
@@ -215,14 +221,14 @@ const QList<const AudioDevice *> CoreAudioDriver::createDeviceList() {
 						propertySize = sizeof(CFStringRef);
 						deviceAddress.mSelector = kAudioDevicePropertyDeviceUID;
 						deviceAddress.mScope = kAudioObjectPropertyScopeGlobal;
-						deviceAddress.mElement = kAudioObjectPropertyElementMaster;
+						deviceAddress.mElement = addressElement;
 
 						if (AudioObjectGetPropertyData(id, &deviceAddress, 0, NULL, &propertySize, &devUidRef) == noErr) {
 							CFStringRef devNameRef;
 							propertySize = sizeof(CFStringRef);
 							deviceAddress.mSelector = kAudioDevicePropertyDeviceNameCFString;
 							deviceAddress.mScope = kAudioObjectPropertyScopeGlobal;
-							deviceAddress.mElement = kAudioObjectPropertyElementMaster;
+							deviceAddress.mElement = addressElement;
 
 							if (AudioObjectGetPropertyData(id, &deviceAddress, 0, NULL, &propertySize, &devNameRef) == noErr) {
 								QString uid = cfStringToQString(devUidRef);

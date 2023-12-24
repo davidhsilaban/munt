@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 #include "JACKAudioDriver.h"
 
 #include "../Master.h"
-#include "../QSynth.h"
+#include "../SynthRoute.h"
 #include "../JACKClient.h"
 #include "../QRingBuffer.h"
 
@@ -110,7 +110,7 @@ public:
 	void setBufferSize(quint32 bufferSizeFrames) {
 		// First, notify the processor thread that an update is pending.
 		pendingUpdateBufferSize = bufferSizeFrames;
-		// Ensure that the processor thread awakes if awating for free space.
+		// Ensure that the processor thread awakes if awaiting for free space.
 		bufferDataRetrievals.release();
 		// Now, await for the processor thread to complete the buffer reallocation.
 		bufferSizeUpdateLatch.acquire();
@@ -141,11 +141,10 @@ JACKAudioStream::~JACKAudioStream() {
 
 bool JACKAudioStream::start(MidiSession *midiSession) {
 	JACKClientState state = jackClient->open(midiSession, this);
-	if (JACKClientState_OPEN != state) {
+	if (JACKClientState_OPENING != state) {
 		qDebug() << "JACKAudioDriver: Failed to open JACK client connection";
 		return false;
 	}
-	jackClient->connectToPhysicalPorts();
 
 	const quint32 jackBufferSizeFrames = jackClient->getBufferSize();
 	qDebug() << "JACKAudioDriver: JACK reported initial audio buffer size (frames / s):"
@@ -176,6 +175,13 @@ bool JACKAudioStream::start(MidiSession *midiSession) {
 		qDebug() << "JACKAudioDriver: Configured synchronous MIDI processing";
 		if (jackClient->isRealtimeProcessing()) synthRoute.enableRealtimeMode();
 	}
+
+	state = jackClient->start();
+	if (JACKClientState_OPEN != state) {
+		qDebug() << "JACKAudioDriver: Failed to start audio processing";
+		return false;
+	}
+	jackClient->connectToPhysicalPorts();
 
 	return true;
 }

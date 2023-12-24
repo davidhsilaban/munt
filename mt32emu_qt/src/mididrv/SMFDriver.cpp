@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -24,9 +24,9 @@
 
 static const MasterClockNanos MAX_SLEEP_TIME = 200 * MasterClock::NANOS_PER_MILLISECOND;
 
-static void sendAllSoundOff(SynthRoute *synthRoute, bool resetAllControllers) {
+static void sendAllSoundOff(SynthRoute *synthRoute, bool resetAllControllers, bool discardMidiBuffers) {
 	if (synthRoute->getState() != SynthRouteState_OPEN) return;
-	if (resetAllControllers) {
+	if (discardMidiBuffers) {
 		synthRoute->discardMidiBuffers();
 	} else {
 		synthRoute->flushMIDIQueue();
@@ -43,31 +43,25 @@ static void sendAllSoundOff(SynthRoute *synthRoute, bool resetAllControllers) {
 	}
 }
 
-SMFProcessor::SMFProcessor(SMFDriver *useSMFDriver) : driver(useSMFDriver) {
-}
+SMFProcessor::SMFProcessor(SMFDriver *useSMFDriver) : driver(useSMFDriver), midiStreamSource()
+{}
 
-void SMFProcessor::start(QString useFileName) {
+void SMFProcessor::start(const MidiStreamSource *useMidiStreamSource) {
+	midiStreamSource = useMidiStreamSource;
 	driver->stopProcessing = false;
 	driver->pauseProcessing = false;
 	driver->bpmUpdate = 0;
 	driver->fastForwardingFactor = 0;
 	driver->seekPosition = -1;
-	fileName = useFileName;
-	if (!parser.parse(fileName)) {
-		qDebug() << "SMFDriver: Error parsing MIDI file:" << fileName;
-		QMessageBox::warning(NULL, "Error", "Error encountered while loading MIDI file");
-		emit driver->playbackFinished();
-		return;
-	}
 	QThread::start(QThread::TimeCriticalPriority);
 }
 
 void SMFProcessor::run() {
-	MidiSession *session = driver->createMidiSession(QFileInfo(fileName).fileName());
+	MidiSession *session = driver->createMidiSession(midiStreamSource->getStreamName());
 	SynthRoute *synthRoute = session->getSynthRoute();
 	bool paused = false;
-	const QMidiEventList &midiEvents = parser.getMIDIEvents();
-	midiTick = parser.getMidiTick();
+	const QMidiEventList &midiEvents = midiStreamSource->getMIDIEvents();
+	midiTick = midiStreamSource->getMidiTick();
 	quint32 totalSeconds = estimateRemainingTime(midiEvents, 0);
 	MasterClockNanos startNanos = MasterClock::getClockNanos();
 	MasterClockNanos currentNanos = startNanos;
@@ -76,14 +70,14 @@ void SMFProcessor::run() {
 		while (!driver->stopProcessing && synthRoute->getState() == SynthRouteState_OPEN) {
 			uint bpmUpdate = uint(driver->bpmUpdate.fetchAndStoreRelaxed(0));
 			if (bpmUpdate > 0) {
-				midiTick = parser.getMidiTick(MidiParser::MICROSECONDS_PER_MINUTE / bpmUpdate);
+				midiTick = midiStreamSource->getMidiTick(MidiParser::MICROSECONDS_PER_MINUTE / bpmUpdate);
 				totalSeconds = (currentNanos - startNanos) / MasterClock::NANOS_PER_SECOND + estimateRemainingTime(midiEvents, currentEventIx + 1);
 			}
 			MasterClockNanos nanosNow = MasterClock::getClockNanos();
 			if (driver->pauseProcessing) {
 				if (!paused) {
 					paused = true;
-					sendAllSoundOff(synthRoute, false);
+					sendAllSoundOff(synthRoute, false, false);
 				}
 				usleep(MAX_SLEEP_TIME / MasterClock::NANOS_PER_MICROSECOND);
 				MasterClockNanos delay = MasterClock::getClockNanos() - nanosNow;
@@ -97,17 +91,17 @@ void SMFProcessor::run() {
 				MasterClockNanos seekNanosSinceStart = totalSeconds * seekPosition * MasterClock::NANOS_PER_MILLISECOND;
 				MasterClockNanos currentNanosSinceStart = currentNanos - startNanos;
 				MasterClockNanos lastEventNanosSinceStart = currentNanosSinceStart - midiEvents.at(currentEventIx).getTimestamp() * midiTick;
-				bool resetAllControllers;
+				bool rewind;
 				if (seekNanosSinceStart < lastEventNanosSinceStart || seekNanosSinceStart == 0) {
-					midiTick = parser.getMidiTick();
+					midiTick = midiStreamSource->getMidiTick();
 					emit driver->tempoUpdated(0);
 					currentEventIx = 0;
 					currentNanosSinceStart = midiEvents.at(currentEventIx).getTimestamp() * midiTick;
-					resetAllControllers = true;
+					rewind = true;
 				} else {
-					resetAllControllers = false;
+					rewind = false;
 				}
-				sendAllSoundOff(synthRoute, resetAllControllers);
+				sendAllSoundOff(synthRoute, rewind, rewind);
 				seek(synthRoute, midiEvents, currentEventIx, currentNanosSinceStart, seekNanosSinceStart);
 				nanosNow = MasterClock::getClockNanos();
 				startNanos = nanosNow - seekNanosSinceStart;
@@ -125,8 +119,8 @@ void SMFProcessor::run() {
 			if (delay < MasterClock::NANOS_PER_MILLISECOND) break;
 			usleep(((delay < MAX_SLEEP_TIME ? delay : MAX_SLEEP_TIME) - MasterClock::NANOS_PER_MILLISECOND) / MasterClock::NANOS_PER_MICROSECOND);
 		}
-		const QMidiEvent &e = midiEvents.at(currentEventIx);
 		if (driver->stopProcessing || synthRoute->getState() != SynthRouteState_OPEN) break;
+		const QMidiEvent &e = midiEvents.at(currentEventIx);
 		switch (e.getType()) {
 			case SHORT_MESSAGE:
 				synthRoute->pushMIDIShortMessage(*session, e.getShortMessage(), currentNanos);
@@ -136,7 +130,7 @@ void SMFProcessor::run() {
 				break;
 			case SET_TEMPO: {
 				uint tempo = e.getShortMessage();
-				midiTick = parser.getMidiTick(tempo);
+				midiTick = midiStreamSource->getMidiTick(tempo);
 				emit driver->tempoUpdated(MidiParser::MICROSECONDS_PER_MINUTE / tempo);
 				break;
 			}
@@ -144,11 +138,11 @@ void SMFProcessor::run() {
 				break;
 		}
 	}
-	sendAllSoundOff(synthRoute, true);
+	sendAllSoundOff(synthRoute, true, false);
 	emit driver->playbackTimeChanged(0, 0);
 	qDebug() << "SMFDriver: processor thread stopped";
 	driver->deleteMidiSession(session);
-	if (!driver->stopProcessing) emit driver->playbackFinished();
+	if (!driver->stopProcessing) emit driver->playbackFinished(synthRoute->getState() == SynthRouteState_OPEN);
 }
 
 quint32 SMFProcessor::estimateRemainingTime(const QMidiEventList &midiEvents, int currentEventIx) {
@@ -157,7 +151,7 @@ quint32 SMFProcessor::estimateRemainingTime(const QMidiEventList &midiEvents, in
 	for (int i = currentEventIx; i < midiEvents.count(); i++) {
 		const QMidiEvent &e = midiEvents.at(i);
 		totalNanos += e.getTimestamp() * tick;
-		if (e.getType() == SET_TEMPO) tick = parser.getMidiTick(e.getShortMessage());
+		if (e.getType() == SET_TEMPO) tick = midiStreamSource->getMidiTick(e.getShortMessage());
 	}
 	return quint32(totalNanos / MasterClock::NANOS_PER_SECOND);
 }
@@ -177,7 +171,7 @@ void SMFProcessor::seek(SynthRoute *synthRoute, const QMidiEventList &midiEvents
 				break;
 			case SET_TEMPO: {
 				uint tempo = e.getShortMessage();
-				midiTick = parser.getMidiTick(tempo);
+				midiTick = midiStreamSource->getMidiTick(tempo);
 				emit driver->tempoUpdated(MidiParser::MICROSECONDS_PER_MINUTE / tempo);
 				break;
 			}
@@ -191,25 +185,35 @@ void SMFProcessor::seek(SynthRoute *synthRoute, const QMidiEventList &midiEvents
 	}
 }
 
-SMFDriver::SMFDriver(Master *useMaster) : MidiDriver(useMaster), processor(this) {
+SMFDriver::SMFDriver(Master *useMaster) : MidiDriver(useMaster), processor(this), midiParser() {
 	name = "Standard MIDI File Driver";
 }
 
 void SMFDriver::start() {
 	static QString currentDir = NULL;
-	QString fileName = QFileDialog::getOpenFileName(NULL, NULL, currentDir, "*.mid *.smf *.syx;;*.mid;;*.smf;;*.syx;;*.*");
+	QFileDialog::Options qFileDialogOptions = QFileDialog::Options(Master::getInstance()->getSettings()->value("Master/qFileDialogOptions", 0).toInt());
+	QString fileName = QFileDialog::getOpenFileName(NULL, NULL, currentDir, "*.mid *.smf *.syx;;*.mid;;*.smf;;*.syx;;*.*",
+		NULL, qFileDialogOptions);
 	currentDir = QDir(fileName).absolutePath();
-	if (!fileName.isEmpty()) {
-		stop();
-		processor.start(fileName);
-	}
+	start(fileName);
 }
 
 void SMFDriver::start(QString fileName) {
-	if (!fileName.isEmpty()) {
-		stop();
-		processor.start(fileName);
+	if (fileName.isEmpty()) return;
+	stop();
+	if (midiParser == NULL) midiParser = new MidiParser;
+	if (!midiParser->parse(fileName)) {
+		qDebug() << "SMFDriver: Error parsing MIDI file:" << fileName;
+		QMessageBox::warning(NULL, "Error", "Error encountered while loading MIDI file");
+		emit playbackFinished(false);
+		return;
 	}
+	processor.start(midiParser);
+}
+
+void SMFDriver::start(const MidiStreamSource *midiStreamSource) {
+	stop();
+	processor.start(midiStreamSource);
 }
 
 void SMFDriver::stop() {
@@ -235,4 +239,5 @@ void SMFDriver::jump(int newPosition) {
 
 SMFDriver::~SMFDriver() {
 	stop();
+	delete midiParser;
 }

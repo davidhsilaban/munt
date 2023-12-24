@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,12 +15,13 @@
  */
 
 #include "WinMMAudioDriver.h"
-#include "../QSynth.h"
 #include "../Master.h"
+#include "../MasterClock.h"
+#include "../SynthRoute.h"
 
 using namespace MT32Emu;
 
-// Looks resonable as KMixer pulls data by 10 ms chunks
+// Looks reasonable as KMixer pulls data by 10 ms chunks
 static const DWORD DEFAULT_CHUNK_MS = 10;
 // SergM: 100 ms output latency is safe on most systems.
 static const DWORD DEFAULT_AUDIO_LATENCY = 100;
@@ -287,7 +288,12 @@ const QList<const AudioDevice *> WinMMAudioDriver::createDeviceList() {
 			qDebug() << "WinMMAudioDriver: waveOutGetDevCaps failed for" << deviceIndex;
 			continue;
 		}
-		deviceList.append(new WinMMAudioDevice(*this, deviceIndex, QString().fromLocal8Bit(deviceInfo.szPname)));
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+			QString deviceName = QString().fromLocal8Bit(deviceInfo.szPname);
+#else
+			QString deviceName = QString().fromWCharArray(deviceInfo.szPname);
+#endif
+		deviceList.append(new WinMMAudioDevice(*this, deviceIndex, deviceName));
 	}
 	return deviceList;
 }

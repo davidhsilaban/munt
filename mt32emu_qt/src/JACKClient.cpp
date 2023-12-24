@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,6 +15,7 @@
  */
 
 #include "JACKClient.h"
+#include "Master.h"
 #include "MidiSession.h"
 #include "mididrv/JACKMidiDriver.h"
 #include "audiodrv/JACKAudioDriver.h"
@@ -69,6 +70,7 @@ JACKClient::~JACKClient() {
 
 JACKClientState JACKClient::open(MidiSession *useMidiSession, JACKAudioStream *useAudioStream) {
 	if (state != JACKClientState_CLOSED) return state;
+
 	client = jack_client_open("mt32emu-qt", JackNullOption, NULL);
 	if (client == NULL) return state;
 
@@ -100,6 +102,8 @@ JACKClientState JACKClient::open(MidiSession *useMidiSession, JACKAudioStream *u
 		audioStream = useAudioStream;
 	}
 
+	state = JACKClientState_OPENING;
+
 	bufferSize = jack_get_buffer_size(client);
 
 	jack_on_shutdown(client, onJACKShutdown, this);
@@ -107,23 +111,23 @@ JACKClientState JACKClient::open(MidiSession *useMidiSession, JACKAudioStream *u
 	jack_set_sample_rate_callback(client, onSampleRateChange, this);
 	jack_set_process_callback(client, onJACKProcess, this);
 
-	if (jack_activate(client) != 0) {
-		jack_client_close(client);
-		client = NULL;
-		return state;
-	}
-
-	state = JACKClientState_OPEN;
 	return state;
 }
 
 JACKClientState JACKClient::close() {
 	if (state == JACKClientState_CLOSED) return state;
-	if (state == JACKClientState_OPEN) {
+	if (state == JACKClientState_OPENING || state == JACKClientState_OPEN) {
 		jack_client_close(client);
 	}
 	client = NULL;
 	state = JACKClientState_CLOSED;
+	return state;
+}
+
+JACKClientState JACKClient::start() {
+	if (state != JACKClientState_OPENING) return state;
+	if (jack_activate(client) != 0) return close();
+	state = JACKClientState_OPEN;
 	return state;
 }
 

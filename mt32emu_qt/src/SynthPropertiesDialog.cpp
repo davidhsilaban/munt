@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -28,6 +28,9 @@ SynthPropertiesDialog::SynthPropertiesDialog(QWidget *parent, SynthRoute *useSyn
 	rsd(synthProfile, this)
 {
 	ui->setupUi(this);
+	if (ui->formLayout->fieldGrowthPolicy() == QFormLayout::FieldsStayAtSizeHint) {
+		ui->formLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+	}
 	refreshProfileCombo("");
 	loadSynthProfile();
 
@@ -143,11 +146,27 @@ void SynthPropertiesDialog::on_reverbCheckBox_stateChanged(int state) {
 }
 
 void SynthPropertiesDialog::on_outputGainSlider_valueChanged(int value) {
-	synthRoute->setOutputGain((float)value / 100.0f);
+	double gain = value / 100.0;
+	ui->outputGainSpinBox->setValue(gain);
+	synthRoute->setOutputGain(float(gain));
+}
+
+void SynthPropertiesDialog::on_outputGainSpinBox_editingFinished() {
+	double value = ui->outputGainSpinBox->value();
+	ui->outputGainSlider->setValue(int(value * 100 + 0.5));
+	synthRoute->setOutputGain(float(value));
 }
 
 void SynthPropertiesDialog::on_reverbOutputGainSlider_valueChanged(int value) {
-	synthRoute->setReverbOutputGain((float)value / 100.0f);
+	double gain = value / 100.0;
+	ui->reverbOutputGainSpinBox->setValue(gain);
+	synthRoute->setReverbOutputGain(float(gain));
+}
+
+void SynthPropertiesDialog::on_reverbOutputGainSpinBox_editingFinished() {
+	double value = ui->reverbOutputGainSpinBox->value();
+	ui->reverbOutputGainSlider->setValue(int(value * 100 + 0.5));
+	synthRoute->setReverbOutputGain(float(value));
 }
 void SynthPropertiesDialog::on_reverseStereoCheckBox_stateChanged(int state) {
 	synthRoute->setReversedStereoEnabled(state == Qt::Checked);
@@ -175,6 +194,10 @@ void SynthPropertiesDialog::on_nicePanningCheckBox_stateChanged(int state) {
 
 void SynthPropertiesDialog::on_nicePartialMixingCheckBox_stateChanged(int state) {
 	synthRoute->setNicePartialMixingEnabled(state == Qt::Checked);
+}
+
+void SynthPropertiesDialog::on_displayCompatibilityComboBox_currentIndexChanged(int index) {
+	synthRoute->setDisplayCompatibilityMode(DisplayCompatibilityMode(index));
 }
 
 void SynthPropertiesDialog::updateReverbSettings() {
@@ -235,6 +258,7 @@ void SynthPropertiesDialog::restoreDefaults() {
 	ui->nicePanningCheckBox->setCheckState(Qt::Unchecked);
 	ui->nicePartialMixingCheckBox->setCheckState(Qt::Unchecked);
 	ui->engageChannel1CheckBox->setCheckState(Qt::Unchecked);
+	ui->displayCompatibilityComboBox->setCurrentIndex(0);
 }
 
 void SynthPropertiesDialog::loadSynthProfile(bool reloadFromSynthRoute) {
@@ -263,6 +287,7 @@ void SynthPropertiesDialog::loadSynthProfile(bool reloadFromSynthRoute) {
 	ui->nicePanningCheckBox->setCheckState(synthProfile.nicePanning ? Qt::Checked : Qt::Unchecked);
 	ui->nicePartialMixingCheckBox->setCheckState(synthProfile.nicePartialMixing ? Qt::Checked : Qt::Unchecked);
 	ui->engageChannel1CheckBox->setCheckState(synthProfile.engageChannel1OnOpen ? Qt::Checked : Qt::Unchecked);
+	ui->displayCompatibilityComboBox->setCurrentIndex(synthProfile.displayCompatibilityMode);
 }
 
 void SynthPropertiesDialog::saveSynthProfile() {
@@ -270,7 +295,9 @@ void SynthPropertiesDialog::saveSynthProfile() {
 	synthRoute->getSynthProfile(newSynthProfile);
 	newSynthProfile.romDir = synthProfile.romDir;
 	newSynthProfile.controlROMFileName = synthProfile.controlROMFileName;
+	newSynthProfile.controlROMFileName2 = synthProfile.controlROMFileName2;
 	newSynthProfile.pcmROMFileName = synthProfile.pcmROMFileName;
+	newSynthProfile.pcmROMFileName2 = synthProfile.pcmROMFileName2;
 	Master &master = *Master::getInstance();
 	QString name = ui->profileComboBox->currentText();
 	master.storeSynthProfile(newSynthProfile, name);
@@ -299,7 +326,7 @@ void SynthPropertiesDialog::refreshProfileCombo(QString name) {
 
 QString SynthPropertiesDialog::getROMSetDescription() {
 	MT32Emu::FileStream file;
-	if (file.open(Master::getROMPathName(synthProfile.romDir, synthProfile.controlROMFileName).toLocal8Bit())) {
+	if (file.open(Master::getROMPathNameLocal(synthProfile.romDir, synthProfile.controlROMFileName))) {
 		const MT32Emu::ROMInfo *romInfo = MT32Emu::ROMInfo::getROMInfo(&file);
 		if (romInfo != NULL) {
 			QString des = romInfo->description;

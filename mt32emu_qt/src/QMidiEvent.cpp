@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -103,7 +103,6 @@ void QMidiEvent::assignSyncMessage(SynthTimestamp newTimestamp) {
 }
 
 QMidiEvent &QMidiEventList::newMidiEvent() {
-	uint s = size();
-	resize(s + 1);
+	resize(size() + 1U);
 	return last();
 }

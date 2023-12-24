@@ -77,7 +77,7 @@ Some brief notes follow below related to each MIDI system.
 5) *JACK MIDI ports and realtime synchronous MIDI-to-audio processing*
 
    Being cross-platform, JACK MIDI stands out of other platform-specific MIDI systems, yet it may be available along with another.
-   Hence, _mt3emu-qt_ does not create JACK MIDI ports (clients) automatically, the user has to create as many clients as necessary.
+   Hence, _mt32emu-qt_ does not create JACK MIDI ports (clients) automatically, the user has to create as many clients as necessary.
    In addition, menu option "New exclusive JACK MIDI port" can be used to create a single JACK client that is able to work as
    a complete synth with a MIDI input and a couple of audio outputs. However, this synth working in the exclusive mode *cannot be
    "pinned"*, thus no additional MIDI sessions can be routed in.
@@ -88,32 +88,50 @@ Building
 Cmake is required for building. The minimum set of dependencies is:
 
 1) Cmake - cross platform make utility
-   @ http://www.cmake.org/
+   @ <http://www.cmake.org/>
 
 2) Qt framework
-   @ http://www.qt.io/
+   @ <http://www.qt.io/>
+
+3) mt32emu library
 
 Additional dependencies maybe needed (depending on the platform):
 
 1) PortAudio - cross-platform audio I/O library
-   @ http://www.portaudio.com/
+   @ <http://www.portaudio.com/>
 
 2) DirectX SDK - for building PortAudio with DirectSound and WDMKS support
-   @ https://www.microsoft.com/en-us/download/details.aspx?id=6812
+   @ <https://www.microsoft.com/en-us/download/details.aspx?id=6812>
 
 3) PulseAudio - sound system for POSIX OSes - provides for accurate audio rendering
-   @ https://www.freedesktop.org/wiki/Software/PulseAudio/
+   @ <https://www.freedesktop.org/wiki/Software/PulseAudio/>
 
 4) JACK Audio Connection Kit - a low-latency synchronous callback-based media server
-   @ https://jackaudio.org/
+   @ <https://jackaudio.org/>
+
+The easiest way to build _mt32emu-qt_ is along with the `mt32emu` within the `munt` project. For a simple in-tree build
+in a POSIX environment, you can probably just run the following commands from the top-level directory containing the `munt` sources:
+
+    cmake -DCMAKE_BUILD_TYPE:STRING=Release .
+    make
+    sudo make install
+
+In this case, the resulting binary is statically linked with the `mt32emu` library which also simplifies further deployment.
+
+_mt32emu-qt_ can also be built stand-alone that may be useful in case the `mt32emu` library is already installed in the system.
+For that, the build has to be performed from within the _mt32emu-qt_ source directory, and the development files of the `mt32emu`
+library must also be installed somewhere in the system.
 
 The build script recognises the following configuration options to control the build:
 
-  * `mt32emu-qt_WITH_QT5` - to prefer version 5 of Qt over version 4 if both are available
+  * `mt32emu-qt_WITH_QT_VERSION` - specifies the exact Qt framework major version (supported range is 4..6) to be linked with;
+    useful when multiple versions are available in the system
   * `mt32emu-qt_USE_PULSEAUDIO_DYNAMIC_LOADING` - whether to load PulseAudio library dynamically (if available)
   * `mt32emu-qt_WITH_DEBUG_WINCONSOLE` - enables a console for showing debug output on Windows systems
   * `mt32emu-qt_WITH_ALSA_MIDI_SEQUENCER` - specifies whether to use the ALSA MIDI sequencer or raw ALSA MIDI ports
     (when targeting Linux platform only)
+  * `mt32emu-qt_PRECOMPILED_HEADER` - an optional C++ header file to use as a precompiled header, included before each source file
+    which may significantly improve build performance
 
 The options can be set in various ways:
 
@@ -126,13 +144,14 @@ a well-performing binary, be sure to set the value of the `CMAKE_BUILD_TYPE` var
 to Release or customise the compiler options otherwise.
 
 To simplify the build configuration process in a non-POSIX environment, the CMake GUI tool
-may come in handy.
+may come in handy. More info on configuration of CMake projects and the dependency management
+can be found at [the CMake homepage](http://www.cmake.org/).
 
 
 License
 =======
 
-Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

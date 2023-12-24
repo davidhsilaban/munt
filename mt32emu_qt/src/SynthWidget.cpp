@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -54,6 +54,7 @@ SynthWidget::SynthWidget(Master *master, SynthRoute *useSynthRoute, bool pinnabl
 	ui->pinCheckBox->setChecked(master->isPinned(synthRoute));
 	ui->pinCheckBox->setEnabled(pinnable);
 
+	master->configureMidiPropertiesDialog(mpd);
 	updateMidiAddActionEnabled(ui);
 
 	connect(synthRoute, SIGNAL(stateChanged(SynthRouteState)), SLOT(handleSynthRouteState(SynthRouteState)));
@@ -225,7 +226,7 @@ void SynthWidget::on_midiList_itemSelectionChanged() {
 	MidiSession *midiSession = getSelectedMIDISession();
 	if (midiSession != NULL) {
 		ui->midiRemove->setEnabled(master->canDeleteMidiPort(midiSession));
-		ui->midiProperties->setEnabled(master->canSetMidiPortProperties(midiSession));
+		ui->midiProperties->setEnabled(master->canReconnectMidiPort(midiSession));
 	} else {
 		ui->midiRemove->setEnabled(false);
 		ui->midiProperties->setEnabled(false);
@@ -233,7 +234,7 @@ void SynthWidget::on_midiList_itemSelectionChanged() {
 }
 
 void SynthWidget::on_midiAdd_clicked() {
-	Master::getInstance()->createMidiPort(&mpd, synthRoute);
+	Master::getInstance()->createMidiPort(mpd, synthRoute);
 }
 
 void SynthWidget::on_midiRemove_clicked() {
@@ -241,7 +242,7 @@ void SynthWidget::on_midiRemove_clicked() {
 }
 
 void SynthWidget::on_midiProperties_clicked() {
-	Master::getInstance()->setMidiPortProperties(&mpd, getSelectedMIDISession());
+	Master::getInstance()->reconnectMidiPort(mpd, getSelectedMIDISession());
 }
 
 void SynthWidget::on_midiRecord_clicked() {
@@ -250,7 +251,9 @@ void SynthWidget::on_midiRecord_clicked() {
 		ui->midiRecord->setText("Record");
 		if (isMidiDataRecorded) {
 			static QString currentDir = NULL;
-			QString fileName = QFileDialog::getSaveFileName(this, NULL, currentDir, "Standard MIDI files (*.mid)");
+			QFileDialog::Options qFileDialogOptions = QFileDialog::Options(Master::getInstance()->getSettings()->value("Master/qFileDialogOptions", 0).toInt());
+			QString fileName = QFileDialog::getSaveFileName(this, NULL, currentDir, "Standard MIDI files (*.mid)",
+				NULL, qFileDialogOptions);
 			if (!fileName.isEmpty()) currentDir = QDir(fileName).absolutePath();
 			synthRoute->saveRecordedMidi(fileName, MasterClock::NANOS_PER_MILLISECOND);
 		}
@@ -266,7 +269,9 @@ void SynthWidget::on_audioRecord_clicked() {
 		synthRoute->stopRecordingAudio();
 	} else {
 		static QString currentDir = NULL;
-		QString fileName = QFileDialog::getSaveFileName(this, NULL, currentDir, "*.wav *.raw;;*.wav;;*.raw;;*.*");
+		QFileDialog::Options qFileDialogOptions = QFileDialog::Options(Master::getInstance()->getSettings()->value("Master/qFileDialogOptions", 0).toInt());
+		QString fileName = QFileDialog::getSaveFileName(this, NULL, currentDir, "*.wav *.raw;;*.wav;;*.raw;;*.*",
+			NULL, qFileDialogOptions);
 		if (!fileName.isEmpty()) {
 			currentDir = QDir(fileName).absolutePath();
 			ui->audioRecord->setText("Stop");

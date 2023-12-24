@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2021 Jerome Fisher, Sergey V. Mikayev
+/* Copyright (C) 2011-2022 Jerome Fisher, Sergey V. Mikayev
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,7 +21,6 @@
 #include "QSynth.h"
 #include "AudioFileWriter.h"
 #include "Master.h"
-#include "MasterClock.h"
 #include "RealtimeLocker.h"
 
 using namespace MT32Emu;
@@ -30,17 +29,28 @@ const int INITIAL_MASTER_VOLUME = 100;
 const int LCD_MESSAGE_LENGTH = 21; // 0-terminated
 const int MIN_PARTIAL_COUNT = 8;
 const int MAX_PARTIAL_COUNT = 256;
-const int PART_COUNT = 9;
+const int VOICE_PART_COUNT = 8;
+const int PART_COUNT = VOICE_PART_COUNT + 1;
 const int SOUND_GROUP_NAME_LENGTH = 9; // 0-terminated
 const int TIMBRE_NAME_LENGTH = 11; // 0-terminated
 const int NO_UPDATE_VALUE = -1;
 
-static const ROMImage *makeROMImage(const QDir &romDir, QString romFileName) {
-	FileStream *file = new FileStream;
-	if (file->open(Master::getROMPathName(romDir, romFileName).toLocal8Bit())) {
-		return ROMImage::makeROMImage(file);
+static const ROMImage *makeROMImage(const QDir &romDir, QString romFileName, QString romFileName2) {
+	if (romFileName2.isEmpty()) {
+		FileStream *file = new FileStream;
+		if (file->open(Master::getROMPathNameLocal(romDir, romFileName))) {
+			const ROMImage *romImage = ROMImage::makeROMImage(file, ROMInfo::getFullROMInfos());
+			if (romImage->getROMInfo() != NULL) return romImage;
+			ROMImage::freeROMImage(romImage);
+		}
+		delete file;
+		return NULL;
 	}
-	return NULL;
+	FileStream file1;
+	FileStream file2;
+	if (!file1.open(Master::getROMPathNameLocal(romDir, romFileName))) return NULL;
+	if (!file2.open(Master::getROMPathNameLocal(romDir, romFileName2))) return NULL;
+	return ROMImage::makeROMImage(&file1, &file2);
 }
 
 static void writeMasterVolumeSysex(Synth *synth, int masterVolume) {
@@ -73,6 +83,30 @@ static int readMasterVolume(Synth *synth) {
 	return masterVolume;
 }
 
+static void writeTimbreSelectionOnPartSysex(Synth *synth, quint8 partNumber, quint8 timbreGroup, quint8 timbreNumber) {
+	Bit8u sysex[] = {0x03, 0x00, quint8(partNumber << 4), timbreGroup, timbreNumber};
+	synth->writeSysex(16, sysex, 5);
+}
+
+static void makeSoundGroups(Synth &synth, QVector<SoundGroup> &groups) {
+	SoundGroup *group = NULL;
+	for (uint timbreGroup = 0; timbreGroup < 4; timbreGroup++) {
+		for (uint timbreNumber = 0; timbreNumber < 64; timbreNumber++) {
+			char soundName[TIMBRE_NAME_LENGTH];
+			if (!synth.getSoundName(soundName, timbreGroup, timbreNumber)) continue;
+			char groupName[SOUND_GROUP_NAME_LENGTH];
+			if (!synth.getSoundGroupName(groupName, timbreGroup, timbreNumber)) continue;
+			if (group == NULL || group->name != groupName) {
+				groups.resize(groups.size() + 1U);
+				group = &groups.last();
+				group->name = groupName;
+			}
+			SoundGroup::Item item = {timbreGroup, timbreNumber, soundName};
+			group->constituents += item;
+		}
+	}
+}
+
 class RealtimeHelper : public QThread {
 private:
 	enum SynthControlEvent {
@@ -83,13 +117,17 @@ private:
 		REVERB_ENABLED_CHANGED,
 		REVERB_OVERRIDDEN_CHANGED,
 		REVERB_SETTINGS_CHANGED,
+		PART_VOLUME_OVERRIDE_CHANGED,
+		PART_TIMBRE_CHANGED,
 		REVERSED_STEREO_ENABLED_CHANGED,
 		NICE_AMP_RAMP_ENABLED_CHANGED,
 		NICE_PANNING_ENABLED_CHANGED,
 		NICE_PARTIAL_MIXING_ENABLED_CHANGED,
 		EMU_DAC_INPUT_MODE_CHANGED,
 		MIDI_DELAY_MODE_CHANGED,
-		MIDI_CHANNELS_ASSIGNMENT_RESET
+		MIDI_CHANNELS_ASSIGNMENT_RESET,
+		DISPLAY_RESET,
+		DISPLAY_COMPATIBILITY_MODE_CHANGED
 	};
 
 	QSynth &qsynth;
@@ -103,6 +141,12 @@ private:
 	float reverbOutputGain;
 	bool reverbEnabled;
 	bool reverbOverridden;
+	int partVolumeOverride[PART_COUNT];
+	struct {
+		quint8 changed : 1;
+		quint8 group : 2;
+		quint8 number : 6;
+	} partTimbres[VOICE_PART_COUNT];
 	bool reversedStereoEnabled;
 	bool niceAmpRampEnabled;
 	bool nicePanningEnabled;
@@ -110,12 +154,15 @@ private:
 	DACInputMode emuDACInputMode;
 	MIDIDelayMode midiDelayMode;
 	bool midiChannelsAssignmentChannel1Engaged;
+	DisplayCompatibilityMode displayCompatibilityMode;
 
 	// Temp synth state collected while rendering, only accessed from the rendering thread.
 	// On backpressure, the latest values are kept.
 	struct {
 		char lcdMessage[LCD_MESSAGE_LENGTH];
-		bool midiMessagePlayed;
+		bool lcdStateUpdated;
+		bool midiMessageLEDState;
+		bool midiMessageLEDStateUpdated;
 		int masterVolumeUpdate;
 		int reverbMode;
 		int reverbTime;
@@ -131,7 +178,10 @@ private:
 	// Synth state snapshot, guarded by stateSnapshotMutex.
 	struct {
 		char lcdMessage[LCD_MESSAGE_LENGTH];
-		bool midiMessagePlayed;
+		char lcdState[LCD_MESSAGE_LENGTH];
+		bool lcdStateUpdated;
+		bool midiMessageLEDState;
+		bool midiMessageLEDStateUpdated;
 		int masterVolumeUpdate;
 		int reverbMode;
 		int reverbTime;
@@ -141,7 +191,6 @@ private:
 			bool programChanged;
 			char soundGroupName[SOUND_GROUP_NAME_LENGTH];
 			char timbreName[TIMBRE_NAME_LENGTH];
-			bool active;
 			Bit32u playingNotesCount;
 			Bit8u keysOfPlayingNotes[MAX_PARTIAL_COUNT];
 			Bit8u velocitiesOfPlayingNotes[MAX_PARTIAL_COUNT];
@@ -149,13 +198,14 @@ private:
 		PartialState partialStates[MAX_PARTIAL_COUNT];
 	} stateSnapshot;
 
-
 	/** Ensures atomicity of collecting changes to be applied to the synth settings. */
 	QMutex settingsMutex;
 	/** Ensures atomicity of handling the output signals of the synth and capturing its internal state. */
 	QMutex stateSnapshotMutex;
 	/** Used to block this thread until each rendering pass completes. */
 	QWaitCondition renderCompleteCondition;
+
+	QVector<SoundGroup> soundGroupCache;
 
 	void applyChangesRealtime() {
 		RealtimeLocker settingsLocker(settingsMutex);
@@ -184,6 +234,22 @@ private:
 			case REVERB_SETTINGS_CHANGED:
 				overrideReverbSettings(synth, qsynth.reverbMode, qsynth.reverbTime, qsynth.reverbLevel);
 				break;
+			case PART_VOLUME_OVERRIDE_CHANGED:
+				for (int i = 0; i < PART_COUNT; i++) {
+					if (NO_UPDATE_VALUE != partVolumeOverride[i]) {
+						synth->setPartVolumeOverride(i, partVolumeOverride[i]);
+						partVolumeOverride[i] = NO_UPDATE_VALUE;
+					}
+				}
+				break;
+			case PART_TIMBRE_CHANGED:
+				for (int i = 0; i < VOICE_PART_COUNT; i++) {
+					if (partTimbres[i].changed) {
+						partTimbres[i].changed = 0;
+						writeTimbreSelectionOnPartSysex(synth, i, partTimbres[i].group, partTimbres[i].number);
+					}
+				}
+				break;
 			case REVERSED_STEREO_ENABLED_CHANGED:
 				synth->setReversedStereoEnabled(reversedStereoEnabled);
 				break;
@@ -205,6 +271,16 @@ private:
 			case MIDI_CHANNELS_ASSIGNMENT_RESET:
 				writeMIDIChannelsAssignmentResetSysex(synth, midiChannelsAssignmentChannel1Engaged);
 				break;
+			case DISPLAY_RESET:
+				synth->setMainDisplayMode();
+				break;
+			case DISPLAY_COMPATIBILITY_MODE_CHANGED:
+				if (DisplayCompatibilityMode_DEFAULT == displayCompatibilityMode) {
+					synth->setDisplayCompatibility(synth->isDefaultDisplayOldMT32Compatible());
+				} else {
+					synth->setDisplayCompatibility(DisplayCompatibilityMode_OLD_MT32 == displayCompatibilityMode);
+				}
+				break;
 			}
 		}
 	}
@@ -215,9 +291,6 @@ private:
 
 		memcpy(stateSnapshot.lcdMessage, tempState.lcdMessage, LCD_MESSAGE_LENGTH - 1);
 		tempState.lcdMessage[0] = 0;
-
-		stateSnapshot.midiMessagePlayed = tempState.midiMessagePlayed;
-		tempState.midiMessagePlayed = false;
 
 		stateSnapshot.masterVolumeUpdate = tempState.masterVolumeUpdate;
 		tempState.masterVolumeUpdate = NO_UPDATE_VALUE;
@@ -231,9 +304,19 @@ private:
 		stateSnapshot.reverbLevel = tempState.reverbLevel;
 		tempState.reverbLevel = NO_UPDATE_VALUE;
 
+		stateSnapshot.midiMessageLEDStateUpdated = tempState.midiMessageLEDStateUpdated;
+		if (tempState.midiMessageLEDStateUpdated) {
+			tempState.midiMessageLEDStateUpdated = false;
+			stateSnapshot.midiMessageLEDState = tempState.midiMessageLEDState;
+		}
+
 		Synth *synth = qsynth.synth;
-		bool partStates[PART_COUNT];
-		synth->getPartStates(partStates);
+
+		stateSnapshot.lcdStateUpdated = tempState.lcdStateUpdated;
+		if (tempState.lcdStateUpdated) {
+			tempState.lcdStateUpdated = false;
+			synth->getDisplayState(stateSnapshot.lcdState);
+		}
 
 		for (int partIx = 0; partIx < PART_COUNT; partIx++) {
 			stateSnapshot.partStates[partIx].programChanged = tempState.partStates[partIx].programChanged;
@@ -242,8 +325,6 @@ private:
 				memcpy(stateSnapshot.partStates[partIx].soundGroupName, tempState.partStates[partIx].soundGroupName, SOUND_GROUP_NAME_LENGTH - 1);
 				memcpy(stateSnapshot.partStates[partIx].timbreName, tempState.partStates[partIx].timbreName, TIMBRE_NAME_LENGTH - 1);
 			}
-
-			stateSnapshot.partStates[partIx].active = partStates[partIx];
 
 			stateSnapshot.partStates[partIx].polyStateChanged = tempState.partStates[partIx].polyStateChanged;
 			if (tempState.partStates[partIx].polyStateChanged) {
@@ -269,9 +350,14 @@ private:
 				stateSnapshot.lcdMessage[0] = 0;
 			}
 
-			if (stateSnapshot.midiMessagePlayed) {
-				emit reportHandler.midiMessagePlayed();
-				stateSnapshot.midiMessagePlayed = false;
+			if (stateSnapshot.lcdStateUpdated) {
+				emit reportHandler.lcdStateChanged();
+				stateSnapshot.lcdStateUpdated = false;
+			}
+
+			if (stateSnapshot.midiMessageLEDStateUpdated) {
+				emit reportHandler.midiMessageLEDStateChanged(stateSnapshot.midiMessageLEDState);
+				stateSnapshot.midiMessageLEDStateUpdated = false;
 			}
 
 			if (stateSnapshot.masterVolumeUpdate > NO_UPDATE_VALUE) {
@@ -331,6 +417,28 @@ public:
 		tempState.reverbMode = NO_UPDATE_VALUE;
 		tempState.reverbTime = NO_UPDATE_VALUE;
 		tempState.reverbLevel = NO_UPDATE_VALUE;
+		stateSnapshot.midiMessageLEDState = qsynth.synth->getDisplayState(stateSnapshot.lcdState);
+		for (int i = 0; i < PART_COUNT; i++) {
+			partVolumeOverride[i] = NO_UPDATE_VALUE;
+		}
+		for (int i = 0; i < VOICE_PART_COUNT; i++) {
+			partTimbres[i].changed = 0;
+		}
+		{
+			makeSoundGroups(*qsynth.synth, soundGroupCache);
+			char memoryGroupName[SOUND_GROUP_NAME_LENGTH];
+			qsynth.synth->getSoundGroupName(memoryGroupName, 2, 0);
+			SoundGroup soundGroup = {memoryGroupName, QVector<SoundGroup::Item>(64)};
+			for (uint i = 0; i < 64; i++) {
+				SoundGroup::Item item = {2, i, "Timbre #" + QString().setNum(i)};
+				soundGroup.constituents[i] = item;
+			}
+			if (soundGroupCache.empty()) {
+				soundGroupCache += soundGroup;
+			} else {
+				soundGroupCache.insert(soundGroupCache.size() - 1U, soundGroup);
+			}
+		}
 	}
 
 	~RealtimeHelper() {
@@ -396,6 +504,20 @@ public:
 		enqueueSynthControlEvent(REVERB_SETTINGS_CHANGED);
 	}
 
+	void setPartVolumeOverride(uint partNumber, Bit8u volumeOverride) {
+		QMutexLocker settingsLocker(&settingsMutex);
+		partVolumeOverride[partNumber] = volumeOverride;
+		enqueueSynthControlEvent(PART_VOLUME_OVERRIDE_CHANGED);
+	}
+
+	void setPartTimbre(uint partNumber, Bit8u timbreGroup, Bit8u timbreNumber) {
+		QMutexLocker settingsLocker(&settingsMutex);
+		partTimbres[partNumber].changed = 1;
+		partTimbres[partNumber].group = timbreGroup;
+		partTimbres[partNumber].number = timbreNumber;
+		enqueueSynthControlEvent(PART_TIMBRE_CHANGED);
+	}
+
 	void setReversedStereoEnabled(bool useReversedStereoEnabled) {
 		QMutexLocker settingsLocker(&settingsMutex);
 		reversedStereoEnabled = useReversedStereoEnabled;
@@ -438,6 +560,17 @@ public:
 		enqueueSynthControlEvent(MIDI_CHANNELS_ASSIGNMENT_RESET);
 	}
 
+	void setMainDisplayMode() {
+		QMutexLocker settingsLocker(&settingsMutex);
+		enqueueSynthControlEvent(DISPLAY_RESET);
+	}
+
+	void setDisplayCompatibilityMode(DisplayCompatibilityMode useDisplayCompatibilityMode) {
+		QMutexLocker settingsLocker(&settingsMutex);
+		displayCompatibilityMode = useDisplayCompatibilityMode;
+		enqueueSynthControlEvent(DISPLAY_COMPATIBILITY_MODE_CHANGED);
+	}
+
 	void resetSynth() {
 		QMutexLocker settingsLocker(&settingsMutex);
 		enqueueSynthControlEvent(SYNTH_RESET);
@@ -465,14 +598,6 @@ public:
 		}
 	}
 
-	void getPartStates(bool *partStates) {
-		QMutexLocker stateSnapshotLocker(&stateSnapshotMutex);
-		if (!qsynth.isOpen()) return;
-		for (int partIx = 0; partIx < PART_COUNT; partIx++) {
-			partStates[partIx] = stateSnapshot.partStates[partIx].active;
-		}
-	}
-
 	void getPartialStates(PartialState *partialStates) {
 		QMutexLocker stateSnapshotLocker(&stateSnapshotMutex);
 		if (!qsynth.isOpen()) return;
@@ -488,16 +613,22 @@ public:
 		return playingNotesCount;
 	}
 
+	bool getDisplayState(char *targetBuffer) {
+		QMutexLocker stateSnapshotLocker(&stateSnapshotMutex);
+		memcpy(targetBuffer, stateSnapshot.lcdState, LCD_MESSAGE_LENGTH);
+		return stateSnapshot.midiMessageLEDState;
+	}
+
+	const QVector<SoundGroup> &getSoundGroupCache() const {
+		return soundGroupCache;
+	}
+
 	void onLCDMessage(const char *message) {
 		memcpy(tempState.lcdMessage, message, LCD_MESSAGE_LENGTH - 1);
 	}
 
-	void onMIDIMessagePlayed() {
-		tempState.midiMessagePlayed = true;
-	}
-
-	void onMasterVolumeChanged(Bit8u masterVolume) {
-		tempState.masterVolumeUpdate = masterVolume;
+	void onMasterVolumeChanged(Bit8u useMasterVolume) {
+		tempState.masterVolumeUpdate = useMasterVolume;
 	}
 
 	void onReverbModeUpdated(Bit8u mode) {
@@ -520,6 +651,15 @@ public:
 		tempState.partStates[partNum].programChanged = true;
 		memcpy(tempState.partStates[partNum].soundGroupName, soundGroupName, SOUND_GROUP_NAME_LENGTH - 1);
 		memcpy(tempState.partStates[partNum].timbreName, patchName, TIMBRE_NAME_LENGTH - 1);
+	}
+
+	void onLCDStateUpdated() {
+		tempState.lcdStateUpdated = true;
+	}
+
+	void onMidiMessageLEDStateUpdated(bool ledState) {
+		tempState.midiMessageLEDState = ledState;
+		tempState.midiMessageLEDStateUpdated = true;
 	}
 };
 
@@ -550,14 +690,6 @@ void QReportHandler::onErrorControlROM() {
 
 void QReportHandler::onErrorPCMROM() {
 	QMessageBox::critical(NULL, "Cannot open Synth", "PCM ROM file cannot be opened.");
-}
-
-void QReportHandler::onMIDIMessagePlayed() {
-	if (qSynth()->isRealtime()) {
-		qSynth()->realtimeHelper->onMIDIMessagePlayed();
-	} else {
-		emit midiMessagePlayed();
-	}
 }
 
 void QReportHandler::onDeviceReconfig() {
@@ -620,20 +752,35 @@ void QReportHandler::onProgramChanged(Bit8u partNum, const char soundGroupName[]
 	}
 }
 
+void QReportHandler::onLCDStateUpdated() {
+	if (qSynth()->isRealtime()) {
+		qSynth()->realtimeHelper->onLCDStateUpdated();
+	} else {
+		emit lcdStateChanged();
+	}
+}
+
+void QReportHandler::onMidiMessageLEDStateUpdated(bool ledState) {
+	if (qSynth()->isRealtime()) {
+		qSynth()->realtimeHelper->onMidiMessageLEDStateUpdated(ledState);
+	} else {
+		emit midiMessageLEDStateChanged(ledState);
+	}
+}
+
 void QReportHandler::doShowLCDMessage(const char *message) {
 	qDebug() << "LCD-Message:" << message;
 	if (Master::getInstance()->getSettings()->value("Master/showLCDBalloons", true).toBool()) {
 		emit balloonMessageAppeared("LCD-Message:", message);
 	}
-	emit lcdMessageDisplayed(message);
 }
 
 QSynth::QSynth(QObject *parent) :
 	QObject(parent), state(SynthState_CLOSED), midiMutex(new QMutex), synthMutex(new QMutex),
-	controlROMImage(), pcmROMImage(), reportHandler(this), sampleRateConverter(),
+	controlROMImage(), pcmROMImage(), synth(), reportHandler(this), sampleRateConverter(),
 	audioRecorder(), realtimeHelper()
 {
-	synth = new Synth(&reportHandler);
+	createSynth();
 }
 
 QSynth::~QSynth() {
@@ -644,6 +791,12 @@ QSynth::~QSynth() {
 	delete synth;
 	delete synthMutex;
 	delete midiMutex;
+}
+
+void QSynth::createSynth() {
+	delete synth;
+	synth = new Synth;
+	synth->setReportHandler2(&reportHandler);
 }
 
 bool QSynth::isOpen() const {
@@ -734,9 +887,15 @@ bool QSynth::open(uint &targetSampleRate, SamplerateConversionQuality srcQuality
 
 	forever {
 		Master::getInstance()->loadSynthProfile(synthProfile, synthProfileName);
-		if (controlROMImage == NULL || pcmROMImage == NULL) Master::getInstance()->findROMImages(synthProfile, controlROMImage, pcmROMImage);
-		if (controlROMImage == NULL) controlROMImage = makeROMImage(synthProfile.romDir, synthProfile.controlROMFileName);
-		if (controlROMImage != NULL && pcmROMImage == NULL) pcmROMImage = makeROMImage(synthProfile.romDir, synthProfile.pcmROMFileName);
+		if (controlROMImage == NULL || pcmROMImage == NULL) {
+			Master::getInstance()->findROMImages(synthProfile, controlROMImage, pcmROMImage);
+		}
+		if (controlROMImage == NULL) {
+			controlROMImage = makeROMImage(synthProfile.romDir, synthProfile.controlROMFileName, synthProfile.controlROMFileName2);
+		}
+		if (controlROMImage != NULL && pcmROMImage == NULL) {
+			pcmROMImage = makeROMImage(synthProfile.romDir, synthProfile.pcmROMFileName, synthProfile.pcmROMFileName2);
+		}
 		if (controlROMImage != NULL && pcmROMImage != NULL) break;
 		qDebug() << "Missing ROM files. Can't open synth :(";
 		freeROMImages();
@@ -766,8 +925,9 @@ bool QSynth::open(uint &targetSampleRate, SamplerateConversionQuality srcQuality
 		sampleRateConverter = new SampleRateConverter(*synth, targetSampleRate, srcQuality);
 		return true;
 	}
-	delete synth;
-	synth = new Synth(&reportHandler);
+	createSynth();
+	setState(SynthState_CLOSED);
+	freeROMImages();
 	return false;
 }
 
@@ -825,6 +985,15 @@ void QSynth::setReverbSettings(int useReverbMode, int useReverbTime, int useReve
 		reverbTime = useReverbTime;
 		reverbLevel = useReverbLevel;
 		if (isOpen()) overrideReverbSettings(synth, useReverbMode, useReverbTime, useReverbLevel);
+	}
+}
+
+void QSynth::setPartVolumeOverride(uint partNumber, uint volumeOverride) {
+	if (isRealtime()) {
+		realtimeHelper->setPartVolumeOverride(partNumber, volumeOverride);
+	} else {
+		QMutexLocker synthLocker(synthMutex);
+		synth->setPartVolumeOverride(Bit8u(partNumber), Bit8u(volumeOverride));
 	}
 }
 
@@ -926,14 +1095,22 @@ const QString QSynth::getPatchName(int partNum) const {
 	return name;
 }
 
-void QSynth::getPartStates(bool *partStates) const {
+void QSynth::setTimbreOnPart(uint partNumber, uint timbreGroup, uint timbreNumber) {
 	if (isRealtime()) {
-		realtimeHelper->getPartStates(partStates);
-	} else {
-		QMutexLocker synthLocker(synthMutex);
-		if (!isOpen()) return;
-		synth->getPartStates(partStates);
+		realtimeHelper->setPartTimbre(partNumber, timbreGroup, timbreNumber);
+		return;
 	}
+	QMutexLocker synthLocker(synthMutex);
+	writeTimbreSelectionOnPartSysex(synth, partNumber, timbreGroup, timbreNumber);
+}
+
+void QSynth::getSoundGroups(QVector<SoundGroup> &groups) const {
+	if (isRealtime()) {
+		groups << realtimeHelper->getSoundGroupCache();
+		return;
+	}
+	QMutexLocker synthLocker(synthMutex);
+	makeSoundGroups(*synth, groups);
 }
 
 void QSynth::getPartialStates(PartialState *partialStates) const {
@@ -966,6 +1143,37 @@ uint QSynth::getSynthSampleRate() const {
 bool QSynth::isActive() const {
 	QMutexLocker synthLocker(synthMutex);
 	return isOpen() && synth->isActive();
+}
+
+bool QSynth::getDisplayState(char *targetBuffer) const {
+	if (isRealtime()) {
+		return realtimeHelper->getDisplayState(targetBuffer);
+	}
+	QMutexLocker synthLocker(synthMutex);
+	return synth->getDisplayState(targetBuffer);
+}
+
+void QSynth::setMainDisplayMode() {
+	if (isRealtime()) {
+		realtimeHelper->setMainDisplayMode();
+	} else {
+		QMutexLocker synthLocker(synthMutex);
+		synth->setMainDisplayMode();
+	}
+}
+
+void QSynth::setDisplayCompatibilityMode(DisplayCompatibilityMode useDisplayCompatibilityMode) {
+	if (isRealtime()) {
+		realtimeHelper->setDisplayCompatibilityMode(useDisplayCompatibilityMode);
+	} else {
+		QMutexLocker synthLocker(synthMutex);
+		displayCompatibilityMode = useDisplayCompatibilityMode;
+		if (DisplayCompatibilityMode_DEFAULT == displayCompatibilityMode) {
+			synth->setDisplayCompatibility(synth->isDefaultDisplayOldMT32Compatible());
+		} else {
+			synth->setDisplayCompatibility(DisplayCompatibilityMode_OLD_MT32 == displayCompatibilityMode);
+		}
+	}
 }
 
 void QSynth::reset() const {
@@ -1005,8 +1213,7 @@ void QSynth::close() {
 		QMutexLocker synthLocker(synthMutex);
 		synth->close();
 		// This effectively resets rendered frame counter, audioStream is also going down
-		delete synth;
-		synth = new Synth(&reportHandler);
+		createSynth();
 		delete sampleRateConverter;
 		sampleRateConverter = NULL;
 	}
@@ -1017,12 +1224,15 @@ void QSynth::close() {
 void QSynth::getSynthProfile(SynthProfile &synthProfile) const {
 	synthProfile.romDir = romDir;
 	synthProfile.controlROMFileName = controlROMFileName;
+	synthProfile.controlROMFileName2 = controlROMFileName2;
 	synthProfile.pcmROMFileName = pcmROMFileName;
+	synthProfile.pcmROMFileName2 = pcmROMFileName2;
 	synthProfile.analogOutputMode = analogOutputMode;
 	synthProfile.rendererType = synth->getSelectedRendererType();
 	synthProfile.partialCount = partialCount;
 	synthProfile.engageChannel1OnOpen = engageChannel1OnOpen;
 	synthProfile.reverbCompatibilityMode = reverbCompatibilityMode;
+	synthProfile.displayCompatibilityMode = displayCompatibilityMode;
 
 	if (isRealtime()) {
 		realtimeHelper->getSynthSettings(synthProfile);
@@ -1050,7 +1260,9 @@ void QSynth::setSynthProfile(const SynthProfile &synthProfile, QString useSynthP
 	// Settings below do not take effect before re-open.
 	romDir = synthProfile.romDir;
 	controlROMFileName = synthProfile.controlROMFileName;
+	controlROMFileName2 = synthProfile.controlROMFileName2;
 	pcmROMFileName = synthProfile.pcmROMFileName;
+	pcmROMFileName2 = synthProfile.pcmROMFileName2;
 	setAnalogOutputMode(synthProfile.analogOutputMode);
 	setRendererType(synthProfile.rendererType);
 	setPartialCount(synthProfile.partialCount);
@@ -1071,6 +1283,7 @@ void QSynth::setSynthProfile(const SynthProfile &synthProfile, QString useSynthP
 	setNicePanningEnabled(synthProfile.nicePanning);
 	setNicePartialMixingEnabled(synthProfile.nicePartialMixing);
 	setInitialMIDIChannelsAssignment(synthProfile.engageChannel1OnOpen);
+	setDisplayCompatibilityMode(synthProfile.displayCompatibilityMode);
 }
 
 void QSynth::getROMImages(const ROMImage *&cri, const ROMImage *&pri) const {

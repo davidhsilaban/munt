@@ -295,6 +295,14 @@ private:
 			delegate.v1->onMidiMessageLEDStateUpdated(instanceData, ledState ? MT32EMU_BOOL_TRUE : MT32EMU_BOOL_FALSE);
 		}
 	}
+    
+    void onSysexMessageSent(char * sysex, Bit32u len) {
+        if (isVersionLess(MT32EMU_REPORT_HANDLER_VERSION_2) || delegate.v2->onSysexMessageSent == NULL) {
+            ReportHandler2::onSysexMessageSent(sysex, len);
+        } else {
+            delegate.v2->onSysexMessageSent(instanceData, sysex, len);
+        }
+    }
 };
 
 class DelegatingMidiStreamParser : public DefaultMidiStreamParser {

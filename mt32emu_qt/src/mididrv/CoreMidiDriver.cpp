@@ -47,7 +47,9 @@ void CoreMidiDriver::midiNotifyProc(MIDINotification const *message, void *) {
 		CoreMidiSession *data = driver->sessions[i];
 		if (data->outDest != removeMessage->child) continue;
 		MIDIEndpointDispose(data->outDest);
+        MIDIEndpointDispose(data->outSrc);
 		MIDIDestinationCreate(driver->client, CFStringCreateWithCString(NULL, data->sessionID.toUtf8().constData(), kCFStringEncodingUTF8), readProc, data, &data->outDest);
+        MIDISourceCreate(driver->client, CFStringCreateWithCString(NULL, data->sessionID.toUtf8().constData(), kCFStringEncodingUTF8), &data->outSrc);
 		qDebug() << "Core MIDI destination recreated. ID:" << data->sessionID;
 	}
 }
@@ -56,6 +58,22 @@ CoreMidiDriver::CoreMidiDriver(Master *useMaster) : MidiDriver(useMaster) {
 	name = "CoreMidi";
 	driver = this;
 	qDebug() << "Core MIDI Driver started";
+}
+
+void CoreMidiDriver::outputMidiData(MidiSession *midiSession, const char *sysex, int len) {
+    for (int i = 0; i < sessions.size(); i++) {
+        if (sessions[i]->midiSession == midiSession) {
+            CoreMidiSession *theSession = sessions[i];
+            
+            Byte packetBuffer[len+100];
+            MIDIPacketList *pktList = (MIDIPacketList*)packetBuffer;
+            MIDIPacket *pkt = MIDIPacketListInit(pktList);
+            pkt = MIDIPacketListAdd(pktList, sizeof(packetBuffer), pkt, 0, len, (const Byte *)sysex);
+            OSStatus res = MIDIReceived(theSession->outSrc, pktList);
+            if (res != noErr) qDebug() << "Error sending MIDI message: " << res;
+            break;
+        }
+    }
 }
 
 void CoreMidiDriver::start() {
@@ -78,12 +96,14 @@ void CoreMidiDriver::createDestination(MidiSession *midiSession, QString session
 	data->sessionID = sessionID;
 	sessions.append(data);
 	MIDIDestinationCreate(client, CFStringCreateWithCString(NULL, data->sessionID.toUtf8().constData(), kCFStringEncodingUTF8), readProc, data, &data->outDest);
+    MIDISourceCreate(client, CFStringCreateWithCString(NULL, data->sessionID.toUtf8().constData(), kCFStringEncodingUTF8), &data->outSrc);
 	qDebug() << "Core MIDI Destination created. ID:" << data->sessionID;
 	nextSessionID++;
 }
 
 void CoreMidiDriver::disposeDestination(CoreMidiSession *data) {
 	MIDIEndpointDispose(data->outDest);
+    MIDIEndpointDispose(data->outSrc);
 	qDebug() << "Core MIDI destination disposed. ID:" << data->sessionID;
 	sessions.removeOne(data);
 	delete data;

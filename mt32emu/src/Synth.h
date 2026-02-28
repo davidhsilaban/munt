@@ -127,6 +127,8 @@ public:
 	virtual void onLCDStateUpdated() {}
 	// Invoked when the emulated MIDI MESSAGE LED changes state. The ledState parameter represents whether the LED is ON.
 	virtual void onMidiMessageLEDStateUpdated(bool /* ledState */) {}
+    
+    virtual void onSysexMessageSent(char * sysex, Bit32u /*len*/) { delete [] sysex; }
 };
 
 class Synth {
@@ -224,7 +226,8 @@ private:
 	bool isAbortingPoly() const { return abortingPoly != NULL; }
 
 	void writeSysexGlobal(Bit32u addr, const Bit8u *sysex, Bit32u len);
-	void readSysex(Bit8u channel, const Bit8u *sysex, Bit32u len) const;
+	void readSysex(Bit8u channel, Bit8u command, const Bit8u *sysex, Bit32u len);
+    void dumpSynth(Bit8u device, Bit8u mode);
 	void initMemoryRegions();
 	void deleteMemoryRegions();
 	MemoryRegion *findMemoryRegion(Bit32u addr);

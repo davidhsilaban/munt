@@ -30,6 +30,7 @@ public:
 	SynthRoute *getSynthRoute() const;
 	QMidiStreamParser *getQMidiStreamParser();
 	QMidiBuffer *getQMidiBuffer();
+    MidiDriver *getMidiDriver();
 	MidiTrackRecorder *getMidiTrackRecorder();
 	MidiTrackRecorder *setMidiTrackRecorder(MidiTrackRecorder *midiTrackRecorder);
 };

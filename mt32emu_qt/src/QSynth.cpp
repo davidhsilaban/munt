@@ -163,6 +163,8 @@ private:
 		bool lcdStateUpdated;
 		bool midiMessageLEDState;
 		bool midiMessageLEDStateUpdated;
+        char *sysexPointer;
+        int sysexLength;
 		int masterVolumeUpdate;
 		int reverbMode;
 		int reverbTime;
@@ -182,6 +184,8 @@ private:
 		bool lcdStateUpdated;
 		bool midiMessageLEDState;
 		bool midiMessageLEDStateUpdated;
+        char *sysexPointer;
+        int sysexLength;
 		int masterVolumeUpdate;
 		int reverbMode;
 		int reverbTime;
@@ -291,6 +295,11 @@ private:
 
 		memcpy(stateSnapshot.lcdMessage, tempState.lcdMessage, LCD_MESSAGE_LENGTH - 1);
 		tempState.lcdMessage[0] = 0;
+        
+        stateSnapshot.sysexPointer = tempState.sysexPointer;
+        stateSnapshot.sysexLength = tempState.sysexLength;
+        tempState.sysexPointer = 0;
+        tempState.sysexLength = 0;
 
 		stateSnapshot.masterVolumeUpdate = tempState.masterVolumeUpdate;
 		tempState.masterVolumeUpdate = NO_UPDATE_VALUE;
@@ -359,6 +368,12 @@ private:
 				emit reportHandler.midiMessageLEDStateChanged(stateSnapshot.midiMessageLEDState);
 				stateSnapshot.midiMessageLEDStateUpdated = false;
 			}
+            
+            if (stateSnapshot.sysexPointer || stateSnapshot.sysexLength > 0) {
+                emit reportHandler.sysexMessageSent(stateSnapshot.sysexPointer, stateSnapshot.sysexLength);
+                stateSnapshot.sysexPointer = NULL;
+                stateSnapshot.sysexLength = 0;
+            }
 
 			if (stateSnapshot.masterVolumeUpdate > NO_UPDATE_VALUE) {
 				emit reportHandler.masterVolumeChanged(stateSnapshot.masterVolumeUpdate);
@@ -661,6 +676,14 @@ public:
 		tempState.midiMessageLEDState = ledState;
 		tempState.midiMessageLEDStateUpdated = true;
 	}
+    
+    void onSysexMessageSent(char *sysex, int len) {
+        RealtimeLocker midiLocker(*qsynth.midiMutex);
+        if (midiLocker.isLocked() && qsynth.isOpen()) {
+            tempState.sysexPointer = sysex;
+            tempState.sysexLength = len;
+        }
+    }
 };
 
 QReportHandler::QReportHandler(QSynth *qsynth) : QObject(qsynth) {
@@ -766,6 +789,14 @@ void QReportHandler::onMidiMessageLEDStateUpdated(bool ledState) {
 	} else {
 		emit midiMessageLEDStateChanged(ledState);
 	}
+}
+
+void QReportHandler::onSysexMessageSent(char * sysex, Bit32u len) {
+    if (qSynth()->isRealtime()) {
+        qSynth()->realtimeHelper->onSysexMessageSent(sysex, len);
+    } else {
+        emit sysexMessageSent(sysex, len);
+    }
 }
 
 void QReportHandler::doShowLCDMessage(const char *message) {

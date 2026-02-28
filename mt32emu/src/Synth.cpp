@@ -1371,7 +1371,7 @@ void Synth::playSysexWithoutHeader(Bit8u device, Bit8u command, const Bit8u *sys
 		}
 		// Fall-through
 	case SYSEX_CMD_RQ1:
-		readSysex(device, sysex, len);
+		readSysex(device, command, sysex, len);
 		break;
 	default:
 		printDebug("playSysexWithoutHeader: Unsupported command %02x", command);
@@ -1379,8 +1379,68 @@ void Synth::playSysexWithoutHeader(Bit8u device, Bit8u command, const Bit8u *sys
 	}
 }
 
-void Synth::readSysex(Bit8u /*device*/, const Bit8u * /*sysex*/, Bit32u /*len*/) const {
+void Synth::readSysex(Bit8u device, Bit8u command, const Bit8u * sysex, Bit32u len) {
 	// NYI
+    
+    // Read sysex directly and send to report handler
+    if (len < 3) {
+//        printDebug("readSysex: Message is too short (%d bytes)!", len);
+        return;
+    }
+
+    Bit32u addr = (sysex[0] << 16) | (sysex[1] << 8) | (sysex[2]);
+    addr = MT32EMU_MEMADDR(addr);
+//    sysex += 3;
+//    len -= 3;
+    
+    Bit32u sysexLen = (sysex[3] << 16) | (sysex[4] << 8) | (sysex[5]);
+    sysexLen = MT32EMU_MEMADDR(sysexLen);
+    
+    if (sysexLen == 0) return;
+    
+    Bit32u totalLen = sysexLen + 3 + 7;
+    Bit8u *data = new Bit8u[totalLen];
+    readMemory(addr, sysexLen, data+8);
+    // Construct DT1 message
+    data[0] = 0xF0;
+    data[1] = 0x41;
+    data[2] = device;
+    data[3] = 0x16;
+    data[4] = command == SYSEX_CMD_RQD ? SYSEX_CMD_DAT : SYSEX_CMD_DT1;
+    data[5] = sysex[0];
+    data[6] = sysex[1];
+    data[7] = sysex[2];
+    data[totalLen-1] = 0xF7;
+    Bit8u checksum = calcSysexChecksum(data+5, sysexLen+3);
+    data[totalLen-2] = checksum;
+    
+    // Send to report handler
+    extensions.reportHandler2->onSysexMessageSent((char*)data, totalLen);
+    
+    // Send EOD
+    Bit8u *dataEod = new Bit8u[6];
+    dataEod[0] = 0xF0;
+    dataEod[1] = 0x41;
+    dataEod[2] = device;
+    dataEod[3] = 0x16;
+    dataEod[4] = 0x45;
+    dataEod[5] = 0xF7;
+    extensions.reportHandler2->onSysexMessageSent((char*)dataEod, 6);
+}
+
+void Synth::dumpSynth(Bit8u device, Bit8u mode) {
+    // Send WSD for Tone
+    Bit8u *dataWsdTone = new Bit8u[12];
+    dataWsdTone[0] = 0xF0;
+    dataWsdTone[1] = 0x41;
+    dataWsdTone[2] = device;
+    dataWsdTone[3] = 0x16;
+    dataWsdTone[4] = 0x40;
+    dataWsdTone[11] = 0xF7;
+    
+    
+    
+    extensions.reportHandler2->onSysexMessageSent((char*)dataWsdTone, 12);
 }
 
 void Synth::writeSysex(Bit8u device, const Bit8u *sysex, Bit32u len) {

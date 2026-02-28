@@ -23,6 +23,10 @@
 #include "MidiSession.h"
 #include "SynthStateMonitor.h"
 
+#ifdef WITH_COREMIDI_DRIVER
+#include "mididrv/CoreMidiDriver.h"
+#endif
+
 static void updateMidiAddActionEnabled(Ui::SynthWidget *ui) {
 	ui->midiAdd->setEnabled(ui->pinCheckBox->isEnabled() && Master::getInstance()->canCreateMidiPort());
 }
@@ -65,6 +69,7 @@ SynthWidget::SynthWidget(Master *master, SynthRoute *useSynthRoute, bool pinnabl
 	connect(ui->synthPropertiesButton, SIGNAL(clicked()), &spd, SLOT(exec()));
 
 	synthRoute->connectReportHandler(SIGNAL(masterVolumeChanged(int)), this, SLOT(handleMasterVolumeChanged(int)));
+    synthRoute->connectReportHandler(SIGNAL(sysexMessageSent(char *, int)), this, SLOT(handleSysexMessageSent(char *, int)));
 
 	handleSynthRouteState(synthRoute->getState());
 }
@@ -286,6 +291,19 @@ void SynthWidget::on_masterVolumeSlider_valueChanged(int newValue) {
 
 void SynthWidget::handleMasterVolumeChanged(int volume) {
 	ui->masterVolumeSlider->setValue(volume);
+}
+
+void SynthWidget::handleSysexMessageSent(char *sysex, int len) {
+    for (int i = 0; i < ui->midiList->count(); i++) {
+        QListWidgetItem *item = ui->midiList->item(i);
+        MidiSession *midiSession = (MidiSession *)item->data(Qt::UserRole).value<QObject *>();
+        if (!midiSession) continue;
+        MidiDriver *midiDriver = midiSession->getMidiDriver();
+        if (CoreMidiDriver *coreMidiDriver = dynamic_cast<CoreMidiDriver*>(midiDriver)) {
+            coreMidiDriver->outputMidiData(midiSession, sysex, len);
+        }
+    }
+    delete [] sysex;
 }
 
 void SynthWidget::hideEvent(QHideEvent *) {

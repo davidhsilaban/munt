@@ -43,6 +43,10 @@ QMidiBuffer *MidiSession::getQMidiBuffer() {
 	return qMidiBuffer;
 }
 
+MidiDriver *MidiSession::getMidiDriver() {
+    return midiDriver;
+}
+
 MidiTrackRecorder * MidiSession::getMidiTrackRecorder() {
 	return midiTrackRecorder;
 }

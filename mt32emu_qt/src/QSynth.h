@@ -91,6 +91,7 @@ public:
 	void onProgramChanged(MT32Emu::Bit8u partNum, const char soundGroupName[], const char patchName[]);
 	void onLCDStateUpdated();
 	void onMidiMessageLEDStateUpdated(bool ledState);
+    void onSysexMessageSent(char * sysex, MT32Emu::Bit32u len);
 	void doShowLCDMessage(const char *message);
 
 private:
@@ -106,6 +107,7 @@ signals:
 	void programChanged(int, QString, QString);
 	void lcdStateChanged();
 	void midiMessageLEDStateChanged(bool);
+    void sysexMessageSent(char *, int);
 };
 
 /**

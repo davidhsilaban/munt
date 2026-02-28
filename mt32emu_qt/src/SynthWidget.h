@@ -66,6 +66,7 @@ private slots:
 	void handleMIDISessionRemoved(MidiSession *midiSession);
 	void handleMIDISessionNameChanged(MidiSession *midiSession);
 	void handleMasterVolumeChanged(int volume);
+    void handleSysexMessageSent(char *sysex, int len);
 };
 
 #endif // SYNTHWIDGET_H

@@ -10,6 +10,7 @@ class CoreMidiDriver : public MidiDriver {
 private:
 	struct CoreMidiSession {
 		QString sessionID;
+        MIDIEndpointRef outSrc;
 		MIDIEndpointRef outDest;
 		MidiSession *midiSession;
 	};
@@ -37,6 +38,7 @@ public:
 	void deletePort(MidiSession *midiSession);
 	void reconnectPort(int newPortIx, const QString &newPortName, MidiSession *midiSession);
 	QString getNewPortNameHint(QStringList &knownPortNames);
+    void outputMidiData(MidiSession *midiSession, const char *sysex, int len);
 };
 
 #endif

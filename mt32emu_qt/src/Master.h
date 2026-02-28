@@ -14,7 +14,11 @@ class QSystemTrayIcon;
 class QDropEvent;
 
 class Master : public QObject {
+//#if TARGET_OS_OSX
 friend int main(int argv, char **args);
+//#else
+//friend int app_main(int argv, char **args);
+//#endif
 	Q_OBJECT
 
 private:

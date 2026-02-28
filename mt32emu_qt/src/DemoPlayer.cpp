@@ -53,6 +53,14 @@ static const uint DEMO_TIMBRE_ADDRESSES = 0x8700;
 static const uint DEMO_PATCH_TABLE_LOW = 0x8800;
 static const uint DEMO_PATCH_TABLE_HIGH = 0x8900;
 
+static const uint EXPECTED_ROM_SIZE_D110 = 163840;
+static const uint DEMO_SONG_COUNT_D110 = 8;
+static const uint DEMO_SONG_REFS_D110 = 0x8EE0;
+static const uint DEMO_TIMBRE_COUNT_D110 = 22;
+static const uint DEMO_TIMBRE_ADDRESSES_D110 = 0x8F00;
+static const uint DEMO_PATCH_TABLE_LOW_D110 = 0x9000;
+static const uint DEMO_PATCH_TABLE_HIGH_D110 = 0x9100;
+
 static const uint TITLE_OFFSET = 0x0000;
 static const uint MIDI_TICK_OFFSET = 0x0010;
 static const uint REVERB_SETTINGS_OFFSET = 0x0012;
@@ -90,7 +98,7 @@ static uint finishSysex(Bit8u *sysexAddr, uint length) {
 static uint checkROM(const MT32Emu::ROMImage *controlROMImage) {
 	if (controlROMImage == NULL) return 0;
 	const ROMInfo *romInfo = controlROMImage->getROMInfo();
-	return ROMInfo::Control == romInfo->type && EXPECTED_ROM_SIZE == romInfo->fileSize ? DEMO_SONG_COUNT : 0;
+	return ROMInfo::Control == romInfo->type && EXPECTED_ROM_SIZE == romInfo->fileSize ? DEMO_SONG_COUNT : (ROMInfo::Control == romInfo->type && EXPECTED_ROM_SIZE_D110 == romInfo->fileSize ? DEMO_SONG_COUNT_D110 : 0);
 }
 
 const ROMImage *DemoPlayer::findSuitableROM(Master *master) {
@@ -106,7 +114,12 @@ const ROMImage *DemoPlayer::findSuitableROM(Master *master) {
 				const ROMInfo *romInfo = romImage->getROMInfo();
 				if (romInfo != NULL && ROMInfo::Control == romInfo->type) return romImage;
 				ROMImage::freeROMImage(romImage);
-			}
+            } else if (EXPECTED_ROM_SIZE_D110 == file->getSize()) {
+                const ROMImage *romImage = ROMImage::makeROMImage(file, ROMInfo::getFullROMInfos());
+                const ROMInfo *romInfo = romImage->getROMInfo();
+                if (romInfo != NULL && ROMInfo::Control == romInfo->type) return romImage;
+                ROMImage::freeROMImage(romImage);
+            }
 		}
 		delete file;
 	}
@@ -180,7 +193,7 @@ void DemoPlayer::play(uint songNumber) {
 
 const Bit8u *DemoPlayer::getSongData(uint songNumber) const {
 	const Bit8u *romData = controlROMImage->getFile()->getData();
-	quint32 songAbsoluteAddress = 2 * qFromLittleEndian<quint16>(&romData[DEMO_SONG_REFS + 2 * songNumber]) + 0x8000;
+	quint32 songAbsoluteAddress = controlROMImage->getROMInfo()->fileSize == EXPECTED_ROM_SIZE ? 2 * qFromLittleEndian<quint16>(&romData[DEMO_SONG_REFS + 2 * songNumber]) + 0x8000 : 2 * qFromLittleEndian<quint16>(&romData[DEMO_SONG_REFS_D110 + 2 * songNumber]) + 0x8000;
 	return &romData[songAbsoluteAddress];
 }
 
@@ -198,14 +211,25 @@ void DemoPlayer::configureSynth() {
 	addSysex(sysex, length);
 	length = finishSysex(sysexAddress, makeRhythmSetupSysex(sysexAddress));
 	addSysex(sysex, length);
-	for (uint timbreNumber = 0; timbreNumber < DEMO_TIMBRE_COUNT; timbreNumber++) {
-		length = finishSysex(sysexAddress, makeTimbreSysex(sysexAddress, timbreNumber));
-		addSysex(sysex, length);
-	}
-	length = finishSysex(sysexAddress, makePatchMemorySysex(sysexAddress, PATCH_MEMORY_LOW_SYSEX_ADDRESS, DEMO_PATCH_TABLE_LOW));
-	addSysex(sysex, length);
-	length = finishSysex(sysexAddress, makePatchMemorySysex(sysexAddress, PATCH_MEMORY_HIGH_SYSEX_ADDRESS, DEMO_PATCH_TABLE_HIGH));
-	addSysex(sysex, length);
+    if (controlROMImage->getROMInfo()->fileSize == EXPECTED_ROM_SIZE) {
+        for (uint timbreNumber = 0; timbreNumber < DEMO_TIMBRE_COUNT; timbreNumber++) {
+            length = finishSysex(sysexAddress, makeTimbreSysex(sysexAddress, timbreNumber));
+            addSysex(sysex, length);
+        }
+        length = finishSysex(sysexAddress, makePatchMemorySysex(sysexAddress, PATCH_MEMORY_LOW_SYSEX_ADDRESS, DEMO_PATCH_TABLE_LOW));
+        addSysex(sysex, length);
+        length = finishSysex(sysexAddress, makePatchMemorySysex(sysexAddress, PATCH_MEMORY_HIGH_SYSEX_ADDRESS, DEMO_PATCH_TABLE_HIGH));
+        addSysex(sysex, length);
+    } else if (controlROMImage->getROMInfo()->fileSize == EXPECTED_ROM_SIZE_D110) {
+        for (uint timbreNumber = 0; timbreNumber < DEMO_TIMBRE_COUNT_D110; timbreNumber++) {
+            length = finishSysex(sysexAddress, makeTimbreSysex(sysexAddress, timbreNumber));
+            addSysex(sysex, length);
+        }
+        length = finishSysex(sysexAddress, makePatchMemorySysex(sysexAddress, PATCH_MEMORY_LOW_SYSEX_ADDRESS, DEMO_PATCH_TABLE_LOW_D110));
+        addSysex(sysex, length);
+        length = finishSysex(sysexAddress, makePatchMemorySysex(sysexAddress, PATCH_MEMORY_HIGH_SYSEX_ADDRESS, DEMO_PATCH_TABLE_HIGH_D110));
+        addSysex(sysex, length);
+    }
 }
 
 Bit32u DemoPlayer::makeSongTitleSysex(Bit8u *sysexPtr) {
@@ -233,7 +257,7 @@ Bit32u DemoPlayer::makeSystemSettingsSysex(Bit8u *sysexPtr) {
 Bit32u DemoPlayer::makeTimbreSysex(Bit8u *sysexPtr, uint timbreNumber) {
 	writeSysexAddr(sysexPtr, 0x200 * timbreNumber + TIMBRE_MEMORY_SYSEX_ADDRESS);
 	const Bit8u *romData = controlROMImage->getFile()->getData();
-	quint32 timbreAbsoluteAddress = qFromLittleEndian<quint16>(&romData[2 * timbreNumber + DEMO_TIMBRE_ADDRESSES]);
+	quint32 timbreAbsoluteAddress = controlROMImage->getROMInfo()->fileSize == EXPECTED_ROM_SIZE ? qFromLittleEndian<quint16>(&romData[2 * timbreNumber + DEMO_TIMBRE_ADDRESSES]) : qFromLittleEndian<quint16>(&romData[2 * timbreNumber + DEMO_TIMBRE_ADDRESSES_D110]) + 0x10000;
 	const Bit8u *romPtr = &romData[timbreAbsoluteAddress];
 	Bit8u partialMute = romPtr[TIMBRE_PARTIAL_MUTE_OFFSET];
 	memcpy(sysexPtr, romPtr, TIMBRE_COMMON_PARAMETERS_SIZE);

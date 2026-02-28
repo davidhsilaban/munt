@@ -371,7 +371,8 @@ void PartVolumeButton::unmutePart() {
 }
 
 void PartVolumeButton::toggleSoloPart(bool enabled) {
-	for (int i = 0; i < 9; i++) {
+    int numParts = monitor.synthRoute->isSuper() ? 16 : 9;
+	for (int i = 0; i < numParts; i++) {
 		if (enabled && i != partNum) {
 			monitor.partVolumeButton[i]->mutePart();
 		} else {
@@ -410,7 +411,8 @@ void PartVolumeButton::handleUnmuteAllTriggered() {
 }
 
 void PartVolumeButton::handleResetAllTriggered() {
-	for (int i = 0; i < 9; i++) {
+    int numParts = monitor.synthRoute->isSuper() ? 16 : 9;
+	for (int i = 0; i < numParts; i++) {
 		monitor.partVolumeButton[i]->handleResetVolumeTriggered();
 	}
 }
@@ -418,7 +420,7 @@ void PartVolumeButton::handleResetAllTriggered() {
 PatchNameButton::PatchNameButton(QWidget *parent, SynthRoute &synthRoute, int partNumber) :
 	QAbstractButton(parent), synthRoute(synthRoute), partNumber(partNumber)
 {
-	if (partNumber < 8) {
+	if (partNumber < 8 || partNumber > 8) {
 		connect(this, SIGNAL(clicked()), SLOT(handleClicked()));
 	} else {
 		setFocusPolicy(Qt::NoFocus);
@@ -436,7 +438,7 @@ QSize PatchNameButton::sizeHint() const {
 		if (height < textSize.height()) height = textSize.height();
 	}
 	QSize sizeHint(textWidth, height);
-	if (partNumber < 8) {
+	if (partNumber < 8 || partNumber > 8) {
 		QStyleOptionButton option;
 		option.initFrom(this);
 		option.rect.setSize(sizeHint);
@@ -448,7 +450,7 @@ QSize PatchNameButton::sizeHint() const {
 void PatchNameButton::paintEvent(QPaintEvent *) {
 	QStylePainter painter(this);
 	painter.drawItemText(rect(), Qt::AlignVCenter | Qt::AlignLeft, palette(), true, text());
-	if (partNumber < 8) {
+	if (partNumber < 8 || partNumber > 8) {
 		QStyleOptionButton option;
 		option.initFrom(this);
 		int arrowWidth = style()->pixelMetric(QStyle::PM_MenuButtonIndicator, &option, this);

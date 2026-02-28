@@ -1869,7 +1869,7 @@ void Synth::refreshSystemReverbParameters() {
 		// Take a shortcut in this case to reduce CPU load.
 		reverbModel = NULL;
 	} else {
-		reverbModel = reverbModels[mt32ram.system.reverbMode];
+		reverbModel = reverbModels[mt32ram.system.reverbMode % 4];
 	}
 	if (reverbModel != oldReverbModel) {
 		if (extensions.preallocatedReverbMemory) {

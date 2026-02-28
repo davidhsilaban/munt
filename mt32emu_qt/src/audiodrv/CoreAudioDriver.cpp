@@ -19,6 +19,18 @@
 #include "../Master.h"
 #include "../SynthRoute.h"
 
+#ifdef Q_OS_IOS
+#include "../ios/AudioSessionManager.h"
+
+// Forward declare C wrapper
+extern "C" {
+    void *AVEngine_Create(double sampleRate, unsigned int bufferSize, CoreAudioStream *owner);
+    void AVEngine_Destroy(void *engine);
+    void AVEngine_Start(void *engine);
+    void AVEngine_Stop(void *engine);
+}
+#endif
+
 static const uint DEFAULT_CHUNK_MS = 20;
 static const uint DEFAULT_AUDIO_LATENCY = 60;
 static const uint DEFAULT_MIDI_LATENCY = 30;
@@ -54,7 +66,7 @@ static QString cfStringToQString(CFStringRef string) {
 }
 
 CoreAudioStream::CoreAudioStream(const AudioDriverSettings &useSettings, SynthRoute &useSynthRoute, quint32 useSampleRate) :
-	AudioStream(useSettings, useSynthRoute, useSampleRate), audioQueue(NULL)
+	AudioStream(useSettings, useSynthRoute, useSampleRate), audioQueue(NULL), avEngine(NULL)
 {
 	const uint bufferSize = (settings.chunkLen * sampleRate) / MasterClock::MILLIS_PER_SECOND;
 	bufferByteSize = bufferSize << 2;
@@ -72,6 +84,7 @@ CoreAudioStream::CoreAudioStream(const AudioDriverSettings &useSettings, SynthRo
 
 CoreAudioStream::~CoreAudioStream() {
 	close();
+    closeAV();
 	delete[] buffers;
 }
 
@@ -97,14 +110,49 @@ void CoreAudioStream::renderOutputBuffer(void *userData, AudioQueueRef queue, Au
 	uint frameCount = buffer->mAudioDataByteSize >> 2;
 	stream->renderAndUpdateState((MT32Emu::Bit16s *)buffer->mAudioData, frameCount, nanosNow, framesInAudioBuffer);
 
+//    qDebug() << "Enqueue";
 	OSStatus res = AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
 	if (res) qDebug() << "CoreAudio: AudioQueueEnqueueBuffer() failed with error code:" << res;
+}
+
+void CoreAudioStream::renderOutputBufferAV(void *buffer, uint frameCount) {
+//    CoreAudioStream *stream = (CoreAudioStream *)userData;
+    const MasterClockNanos nanosNow = MasterClock::getClockNanos();
+    quint32 framesInAudioBuffer = 0;
+//    if (queue == NULL) {
+//        // Priming the buffers, skip timestamp handling
+//        queue = stream->audioQueue;
+//    } else if (stream->settings.advancedTiming) {
+//        AudioTimeStamp audioTimeStamp;
+//        OSStatus res = AudioQueueGetCurrentTime(queue, NULL, &audioTimeStamp, NULL);
+//        if (res) {
+//            qDebug() << "CoreAudio: AudioQueueGetCurrentTime() failed with error code:" << res;
+//        } else if (audioTimeStamp.mFlags & kAudioTimeStampSampleTimeValid) {
+//            framesInAudioBuffer = quint32(stream->getRenderedFramesCount() - audioTimeStamp.mSampleTime);
+//        } else {
+//            qDebug() << "CoreAudio: AudioQueueGetCurrentTime() returns invalid sample time";
+//        }
+//    }
+
+//    uint frameCount = buffer->mAudioDataByteSize >> 2;
+    renderAndUpdateState((MT32Emu::Bit16s *)buffer, frameCount, nanosNow, framesInAudioBuffer);
+
+//    qDebug() << "Enqueue";
+//    OSStatus res = AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
+//    if (res) qDebug() << "CoreAudio: AudioQueueEnqueueBuffer() failed with error code:" << res;
+}
+
+void CoreAudioStream::aqNotification(void * _Nullable inUserData, AudioQueueRef inAQ, AudioQueuePropertyID inID) {
+    qDebug() << "aqNotification";
 }
 
 bool CoreAudioStream::start(const QString deviceUid) {
 	if (audioQueue != NULL) {
 		return true;
 	}
+    
+    startBgTask();
+    setupAudioSession();
 
 	AudioStreamBasicDescription dataFormat = {(Float64)sampleRate, kAudioFormatLinearPCM, kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsSignedInteger, 4, 1, 4, 2, 16, 0};
 	OSStatus res = AudioQueueNewOutput(&dataFormat, renderOutputBuffer, this, NULL, NULL, 0, &audioQueue);
@@ -112,6 +160,8 @@ bool CoreAudioStream::start(const QString deviceUid) {
 		qDebug() << "CoreAudio: AudioQueueNewOutput() failed with error code:" << res;
 		return false;
 	}
+    
+    AudioQueueAddPropertyListener(audioQueue, kAudioQueueProperty_IsRunning, aqNotification, NULL);
 
 	// Set audio output device
 	if (deviceUid.isEmpty()) {
@@ -160,7 +210,88 @@ void CoreAudioStream::close() {
 	if (audioQueue == NULL) return;
 	OSStatus res = AudioQueueDispose(audioQueue, true);
 	if (res) qDebug() << "CoreAudio: AudioQueueDispose() failed with error code" << res;
+    AudioQueueRemovePropertyListener(audioQueue, kAudioQueueProperty_IsRunning, aqNotification, NULL);
 	audioQueue = NULL;
+    stopBgTask();
+}
+
+bool CoreAudioStream::startAV(const QString deviceUid) {
+    if (avEngine != NULL) {
+        return true;
+    }
+    
+    avEngine = AVEngine_Create(sampleRate, bufferByteSize, this);
+    
+    if (avEngine == NULL) {
+        return false;
+    }
+    
+    AVEngine_Start(avEngine);
+    return true;
+    
+#if 0
+    startBgTask();
+    setupAudioSession();
+
+    AudioStreamBasicDescription dataFormat = {(Float64)sampleRate, kAudioFormatLinearPCM, kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsSignedInteger, 4, 1, 4, 2, 16, 0};
+    OSStatus res = AudioQueueNewOutput(&dataFormat, renderOutputBuffer, this, NULL, NULL, 0, &audioQueue);
+    if (res || audioQueue == NULL) {
+        qDebug() << "CoreAudio: AudioQueueNewOutput() failed with error code:" << res;
+        return false;
+    }
+    
+    AudioQueueAddPropertyListener(audioQueue, kAudioQueueProperty_IsRunning, aqNotification, NULL);
+
+    // Set audio output device
+    if (deviceUid.isEmpty()) {
+        qDebug() << "CoreAudio: Using default audio output device";
+    } else {
+        CFStringRef deviceUidRef = qStringToCFString(deviceUid);
+        res = AudioQueueSetProperty(audioQueue, kAudioQueueProperty_CurrentDevice, &deviceUidRef, sizeof(CFStringRef));
+        if (res) {
+            qDebug() << "CoreAudio: AudioQueueSetProperty() failed with error code" << res;
+            res = AudioQueueDispose(audioQueue, true);
+            if (res) qDebug() << "CoreAudio: AudioQueueDispose() failed with error code" << res;
+            audioQueue = NULL;
+            return false;
+        }
+        qDebug() << "CoreAudio: Using audio output device:" << deviceUid;
+        CFRelease(deviceUidRef);
+    }
+
+    for (uint i = 0; i < numberOfBuffers; i++) {
+        res = AudioQueueAllocateBuffer(audioQueue, bufferByteSize, buffers + i);
+        if (res || buffers[i] == NULL) {
+            qDebug() << "CoreAudio: AudioQueueAllocateBuffer() failed with error code" << res;
+            res = AudioQueueDispose(audioQueue, true);
+            if (res) qDebug() << "CoreAudio: AudioQueueDispose() failed with error code" << res;
+            audioQueue = NULL;
+            return false;
+        }
+        buffers[i]->mAudioDataByteSize = bufferByteSize;
+        // Prime the buffer allocated
+        renderOutputBuffer(this, NULL, buffers[i]);
+    }
+
+    res = AudioQueueStart(audioQueue, NULL);
+    if (res) {
+        qDebug() << "CoreAudio: AudioQueueStart() failed with error code" << res;
+        res = AudioQueueDispose(audioQueue, true);
+        if (res) qDebug() << "CoreAudio: AudioQueueDispose() failed with error code" << res;
+        audioQueue = NULL;
+        return false;
+    }
+
+    return true;
+#endif
+}
+
+void CoreAudioStream::closeAV() {
+    if (avEngine == NULL) return;
+    AVEngine_Stop(avEngine);
+    AVEngine_Destroy(avEngine);
+    avEngine = NULL;
+//    stopBgTask();
 }
 
 CoreAudioDevice::CoreAudioDevice(CoreAudioDriver &driver, const QString uid, const QString name) :
@@ -168,7 +299,7 @@ CoreAudioDevice::CoreAudioDevice(CoreAudioDriver &driver, const QString uid, con
 
 AudioStream *CoreAudioDevice::startAudioStream(SynthRoute &synthRoute, const uint sampleRate) const {
 	CoreAudioStream *stream = new CoreAudioStream(driver.getAudioSettings(), synthRoute, sampleRate);
-	if (stream->start(uid)) {
+	if (stream->startAV(uid)) {
 		return (AudioStream *)stream;
 	}
 	delete stream;
@@ -178,6 +309,7 @@ AudioStream *CoreAudioDevice::startAudioStream(SynthRoute &synthRoute, const uin
 CoreAudioDriver::CoreAudioDriver(Master *useMaster) : AudioDriver("CoreAudio", "CoreAudio") {
 	Q_UNUSED(useMaster);
 
+    setupAudioSession();
 	loadAudioSettings();
 }
 
@@ -188,6 +320,7 @@ const QList<const AudioDevice *> CoreAudioDriver::createDeviceList() {
 	QList<const AudioDevice *> deviceList;
 	deviceList.append(new CoreAudioDevice(*this)); // default device
 
+#ifdef Q_OS_MACOS
 #if defined(MAC_OS_VERSION_12_0) && (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_VERSION_12_0)
 	AudioObjectPropertyElement addressElement = kAudioObjectPropertyElementMain;
 #else
@@ -243,6 +376,7 @@ const QList<const AudioDevice *> CoreAudioDriver::createDeviceList() {
 			}
 		}
 	}
+#endif
 
 	return deviceList;
 }

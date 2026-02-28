@@ -2,7 +2,7 @@
 #define CORE_AUDIO_DRIVER_H
 
 #include <AudioToolbox/AudioQueue.h>
-#include <CoreAudio/AudioHardware.h>
+//#include <CoreAudio/AudioHardware.h>
 
 #include "AudioDriver.h"
 
@@ -14,16 +14,23 @@ class CoreAudioStream : public AudioStream {
 private:
 	AudioQueueRef audioQueue;
 	AudioQueueBufferRef *buffers;
+    void *avEngine;
 	uint numberOfBuffers;
 	uint bufferByteSize;
 
 	static void renderOutputBuffer(void *userData, AudioQueueRef queue, AudioQueueBufferRef buffer);
+    static void aqNotification(void * __nullable       inUserData,
+                               AudioQueueRef           inAQ,
+                               AudioQueuePropertyID    inID);
 
 public:
 	CoreAudioStream(const AudioDriverSettings &settings, SynthRoute &synthRoute, const quint32 sampleRate);
 	~CoreAudioStream();
 	bool start(const QString deviceUid);
 	void close();
+    bool startAV(const QString deviceUid);
+    void closeAV();
+    void renderOutputBufferAV(void *buffer, uint frameCount);
 };
 
 class CoreAudioDevice : public AudioDevice {

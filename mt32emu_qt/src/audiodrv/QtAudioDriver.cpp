@@ -30,6 +30,10 @@
 #include "../MasterClock.h"
 #include "../SynthRoute.h"
 
+#ifdef Q_OS_IOS
+#include "../ios/AudioSessionManager.h"
+#endif
+
 using namespace MT32Emu;
 
 class WaveGenerator : public QIODevice {
@@ -83,10 +87,14 @@ public:
 QtAudioStream::QtAudioStream(const AudioDriverSettings &useSettings, SynthRoute &useSynthRoute, const quint32 useSampleRate) :
 	AudioStream(useSettings, useSynthRoute, useSampleRate)
 {
+    setupAudioSession();
+    
 	// Creating QAudioOutput in a thread leads to smooth rendering
 	// Rendering will be performed in the main thread otherwise
 	processingThread = new ProcessingThread(*this);
 	processingThread->start(QThread::TimeCriticalPriority);
+//    start();
+//    close();
 }
 
 QtAudioStream::~QtAudioStream() {

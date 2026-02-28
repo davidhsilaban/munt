@@ -1146,13 +1146,14 @@ bool QSynth::isActive() const {
 }
 
 bool QSynth::isSuper() const {
-    synthMutex->lock();
+//    synthMutex->lock();
     if (!isOpen()) {
-        synthMutex->unlock();
+//        synthMutex->unlock();
         return false;
     }
+    QMutexLocker synthLocker(synthMutex);
     bool result = synth->isSuper();
-    synthMutex->unlock();
+//    synthMutex->unlock();
     return result;
 }
 

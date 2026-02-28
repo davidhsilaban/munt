@@ -99,7 +99,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL Windows OR CYGWIN)
   else()
     set(CMAKE_WIN32_EXECUTABLE True)
   endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
+elseif(CMAKE_SYSTEM_NAME STREQUAL Darwin OR CMAKE_SYSTEM_NAME STREQUAL iOS)
   add_definitions(-DWITH_COREMIDI_DRIVER -DWITH_COREAUDIO_DRIVER)
   list(APPEND mt32emu_qt_SOURCES
     src/mididrv/CoreMidiDriver.cpp

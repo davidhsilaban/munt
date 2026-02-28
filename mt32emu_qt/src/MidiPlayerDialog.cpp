@@ -49,18 +49,24 @@ void MidiPlayerDialog::on_playList_activated(const QModelIndex &) {
 }
 
 void MidiPlayerDialog::on_addButton_clicked() {
-	QSettings *settings = Master::getInstance()->getSettings();
-	static QString currentDir = settings->value("Master/LastAddMidiFileDir").toString();
-	QFileDialog::Options qFileDialogOptions = QFileDialog::Options(settings->value("Master/qFileDialogOptions", 0).toInt());
-	QStringList fileNames = QFileDialog::getOpenFileNames(this, NULL, currentDir, "*.mid *.smf *.syx;;*.mid;;*.smf;;*.syx;;*.*",
-		NULL, qFileDialogOptions);
-	if (fileNames.isEmpty()) return;
-	currentDir = QDir(fileNames.first()).absolutePath();
-	settings->setValue("Master/LastAddMidiFileDir", currentDir);
-	int row = ui->playList->currentRow();
-	ui->playList->insertItems(row + 1, fileNames);
-	ui->playList->setCurrentRow(row + fileNames.count());
-	updateCurrentItem();
+#ifdef Q_OS_IOS
+    QTimer::singleShot(0, this, [this]{
+#endif
+        QSettings *settings = Master::getInstance()->getSettings();
+        static QString currentDir = settings->value("Master/LastAddMidiFileDir").toString();
+        QFileDialog::Options qFileDialogOptions = QFileDialog::Options(settings->value("Master/qFileDialogOptions", 0).toInt());
+        QStringList fileNames = QFileDialog::getOpenFileNames(this, NULL, currentDir, "*.mid *.smf *.syx;;*.mid;;*.smf;;*.syx;;*.*",
+                                                              NULL, qFileDialogOptions);
+        if (fileNames.isEmpty()) return;
+        currentDir = QDir(fileNames.first()).absolutePath();
+        settings->setValue("Master/LastAddMidiFileDir", currentDir);
+        int row = ui->playList->currentRow();
+        ui->playList->insertItems(row + 1, fileNames);
+        ui->playList->setCurrentRow(row + fileNames.count());
+        updateCurrentItem();
+#ifdef Q_OS_IOS
+    });
+#endif
 }
 
 void MidiPlayerDialog::on_addListButton_clicked() {

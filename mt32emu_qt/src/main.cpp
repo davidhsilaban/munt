@@ -20,13 +20,61 @@
 #include "MainWindow.h"
 #include "Master.h"
 
+void copyResourceFiles() {
+    // Get app bundle directory
+    QString bundlePath = QCoreApplication::applicationDirPath();
+    qDebug() << "Bundle Path:" << bundlePath;
+
+    // Assuming .bin files are directly in the bundle or a subfolder, e.g. "Data"
+    QString binFolder = bundlePath;  // Adjust if files are in another folder
+
+    QDir dir(binFolder);
+    if (!dir.exists()) {
+        qDebug() << "Bin folder does not exist:" << binFolder;
+        return;
+    }
+
+    // Filter to get .bin files
+    QStringList binFiles = dir.entryList(QStringList() << "*.bin", QDir::Files);
+    if (binFiles.isEmpty()) {
+        qDebug() << "No .bin files found in bundle folder.";
+        return;
+    }
+
+    // Get Documents directory
+    QString documentsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    QDir documentsDir(documentsPath);
+
+    for (const QString &fileName : binFiles) {
+        QString sourcePath = binFolder + "/" + fileName;
+        QString destinationPath = documentsPath + "/" + fileName;
+
+        if (QFile::exists(destinationPath)) {
+            qDebug() << fileName << "already exists in Documents. Skipping.";
+            continue;
+        }
+
+        if (QFile::copy(sourcePath, destinationPath)) {
+            qDebug() << "Copied" << fileName << "to Documents.";
+        } else {
+            qDebug() << "Failed to copy" << fileName;
+        }
+    }
+}
+
+//#if TARGET_OS_OSX
 int main(int argv, char **args) {
+//#else
+//int app_main(int argv, char **args) {
+//#endif
 #if (QT_VERSION_CHECK(5, 6, 0) <= QT_VERSION && QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
 	QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 #endif
 	QApplication app(argv, args);
 	app.setApplicationName("Munt mt32emu-qt");
 	app.setQuitOnLastWindowClosed(false);
+    
+    copyResourceFiles();
 	{
 		setlocale(LC_ALL, "");
 		Master master;
